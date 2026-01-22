@@ -1,0 +1,172 @@
+/// DNA complement table (handles IUPAC codes)
+/// Index by ASCII value to get complement
+const COMPLEMENT_TABLE: [u8; 128] = {
+    let mut table = [b'N'; 128];
+    
+    // Standard bases
+    table[b'A' as usize] = b'T';
+    table[b'T' as usize] = b'A';
+    table[b'G' as usize] = b'C';
+    table[b'C' as usize] = b'G';
+    table[b'U' as usize] = b'A';  // RNA
+    
+    // Lowercase
+    table[b'a' as usize] = b't';
+    table[b't' as usize] = b'a';
+    table[b'g' as usize] = b'c';
+    table[b'c' as usize] = b'g';
+    table[b'u' as usize] = b'a';
+    
+    // IUPAC ambiguity codes
+    table[b'R' as usize] = b'Y';  // R = A|G -> Y = T|C
+    table[b'Y' as usize] = b'R';  // Y = T|C -> R = A|G
+    table[b'S' as usize] = b'S';  // S = G|C -> S = C|G (self-complementary)
+    table[b'W' as usize] = b'W';  // W = A|T -> W = T|A (self-complementary)
+    table[b'K' as usize] = b'M';  // K = G|T -> M = C|A
+    table[b'M' as usize] = b'K';  // M = A|C -> K = T|G
+    table[b'B' as usize] = b'V';  // B = C|G|T -> V = G|C|A
+    table[b'V' as usize] = b'B';  // V = A|C|G -> B = T|G|C
+    table[b'D' as usize] = b'H';  // D = A|G|T -> H = T|C|A
+    table[b'H' as usize] = b'D';  // H = A|C|T -> D = T|G|A
+    table[b'N' as usize] = b'N';  // N = any -> N
+    
+    // Lowercase IUPAC
+    table[b'r' as usize] = b'y';
+    table[b'y' as usize] = b'r';
+    table[b's' as usize] = b's';
+    table[b'w' as usize] = b'w';
+    table[b'k' as usize] = b'm';
+    table[b'm' as usize] = b'k';
+    table[b'b' as usize] = b'v';
+    table[b'v' as usize] = b'b';
+    table[b'd' as usize] = b'h';
+    table[b'h' as usize] = b'd';
+    table[b'n' as usize] = b'n';
+    
+    table
+};
+
+/// Get the complement of a single nucleotide
+#[inline]
+pub fn complement(base: u8) -> u8 {
+    if base < 128 {
+        COMPLEMENT_TABLE[base as usize]
+    } else {
+        b'N'
+    }
+}
+
+/// Compute the reverse complement of a DNA sequence
+pub fn reverse_complement(seq: &[u8]) -> Vec<u8> {
+    seq.iter()
+        .rev()
+        .map(|&b| complement(b))
+        .collect()
+}
+
+/// Compute reverse complement in place (for efficiency)
+pub fn reverse_complement_into(seq: &[u8], output: &mut Vec<u8>) {
+    output.clear();
+    output.reserve(seq.len());
+    for &b in seq.iter().rev() {
+        output.push(complement(b));
+    }
+}
+
+/// Calculate percentage identity from edit distance and alignment length
+/// Returns value between 0.0 and 1.0
+pub fn calculate_identity(edit_distance: usize, alignment_len: usize) -> f64 {
+    if alignment_len == 0 {
+        return 0.0;
+    }
+    let matches = alignment_len.saturating_sub(edit_distance);
+    matches as f64 / alignment_len as f64
+}
+
+/// Extend a sequence for circular genome searching
+/// Appends the beginning of the sequence to allow wrap-around matches
+pub fn make_circular_searchable(seq: &[u8], max_product_len: usize) -> Vec<u8> {
+    if seq.is_empty() {
+        return Vec::new();
+    }
+    
+    // We need to extend by at most max_product_len - 1 to catch wrap-around
+    // But also don't extend more than the sequence length itself
+    let extend_len = (max_product_len.saturating_sub(1)).min(seq.len());
+    
+    let mut extended = Vec::with_capacity(seq.len() + extend_len);
+    extended.extend_from_slice(seq);
+    extended.extend_from_slice(&seq[..extend_len]);
+    extended
+}
+
+/// Check if a position in an extended circular sequence wraps around
+pub fn is_circular_wrap(pos: usize, original_len: usize) -> bool {
+    pos >= original_len
+}
+
+/// Convert a position from extended circular sequence back to original coordinates
+pub fn circular_to_original_pos(pos: usize, original_len: usize) -> usize {
+    pos % original_len
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_complement() {
+        assert_eq!(complement(b'A'), b'T');
+        assert_eq!(complement(b'T'), b'A');
+        assert_eq!(complement(b'G'), b'C');
+        assert_eq!(complement(b'C'), b'G');
+        assert_eq!(complement(b'N'), b'N');
+    }
+
+    #[test]
+    fn test_complement_iupac() {
+        assert_eq!(complement(b'R'), b'Y');
+        assert_eq!(complement(b'Y'), b'R');
+        assert_eq!(complement(b'S'), b'S');
+        assert_eq!(complement(b'W'), b'W');
+        assert_eq!(complement(b'K'), b'M');
+        assert_eq!(complement(b'M'), b'K');
+    }
+
+    #[test]
+    fn test_reverse_complement() {
+        assert_eq!(reverse_complement(b"ACGT"), b"ACGT");
+        assert_eq!(reverse_complement(b"AAAA"), b"TTTT");
+        assert_eq!(reverse_complement(b"ATCG"), b"CGAT");
+        assert_eq!(reverse_complement(b""), b"");
+    }
+
+    #[test]
+    fn test_calculate_identity() {
+        assert!((calculate_identity(0, 20) - 1.0).abs() < 0.001);
+        assert!((calculate_identity(2, 20) - 0.9).abs() < 0.001);
+        assert!((calculate_identity(10, 20) - 0.5).abs() < 0.001);
+        assert!((calculate_identity(0, 0) - 0.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_circular_searchable() {
+        let seq = b"ABCDEFGH";
+        let extended = make_circular_searchable(seq, 4);
+        assert_eq!(&extended, b"ABCDEFGHABC");
+    }
+
+    #[test]
+    fn test_circular_wrap() {
+        assert!(!is_circular_wrap(5, 10));
+        assert!(is_circular_wrap(10, 10));
+        assert!(is_circular_wrap(15, 10));
+    }
+
+    #[test]
+    fn test_circular_to_original() {
+        assert_eq!(circular_to_original_pos(5, 10), 5);
+        assert_eq!(circular_to_original_pos(10, 10), 0);
+        assert_eq!(circular_to_original_pos(12, 10), 2);
+    }
+}
