@@ -20,7 +20,7 @@ Requires Rust 1.85+ (2024 edition).
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/amplirust.git
+git clone https://github.com/erdikilic/amplirust.git
 cd amplirust
 
 # Build with SIMD optimizations (recommended)
