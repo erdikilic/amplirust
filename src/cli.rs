@@ -52,6 +52,10 @@ pub struct Args {
     #[arg(long, default_value_t = false)]
     pub trim_primers: bool,
 
+    /// Maximum fraction of N bases allowed in product sequence (0.0 - 1.0)
+    #[arg(long, default_value_t = 0.1, value_parser = clap::value_parser!(f64))]
+    pub max_n_fraction: f64,
+
     // ==================== OUTPUT OPTIONS ====================
     /// Output FASTA file (use .gz extension for gzip compression)
     #[arg(short, long)]
@@ -68,6 +72,10 @@ pub struct Args {
     /// Suppress progress bar output
     #[arg(short, long, default_value_t = false)]
     pub quiet: bool,
+
+    /// Remove duplicate product sequences per reference
+    #[arg(long, default_value_t = false)]
+    pub remove_duplicates: bool,
 }
 
 impl Args {
@@ -95,7 +103,7 @@ impl Args {
 
     /// Check if progress bar should be shown
     pub fn show_progress(&self) -> bool {
-        !self.quiet
+        !self.quiet && self.verbose == 0
     }
 }
 

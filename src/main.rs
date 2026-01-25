@@ -5,7 +5,7 @@ use amplirust::cli::Args;
 use amplirust::input::{expand_input_patterns, read_all_sequences};
 use amplirust::matcher::MatchConfig;
 use amplirust::output::{write_fasta, write_fasta_stdout, write_tsv, RunSummary};
-use amplirust::pcr::{find_all_products, PcrConfig};
+use amplirust::pcr::{find_all_products, remove_duplicate_products_by_reference, PcrConfig};
 use amplirust::primer::parse_primers;
 
 fn main() -> Result<()> {
@@ -38,6 +38,13 @@ fn run(args: Args) -> Result<()> {
     let show_progress = args.show_progress();
     
     log::info!("Amplirust v{}", env!("CARGO_PKG_VERSION"));
+
+    if !(0.0..=1.0).contains(&args.max_n_fraction) {
+        anyhow::bail!(
+            "Invalid --max-n-fraction value {} (expected 0.0 - 1.0)",
+            args.max_n_fraction
+        );
+    }
 
     // Configure thread pool
     let threads = args.effective_threads();
@@ -95,6 +102,7 @@ fn run(args: Args) -> Result<()> {
         max_len: args.max_len,
         circular: args.circular,
         trim_primers: args.trim_primers,
+        max_n_fraction: args.max_n_fraction,
     };
 
     log::info!("Searching for PCR products...");
@@ -104,9 +112,18 @@ fn run(args: Args) -> Result<()> {
     log::debug!("  Circular mode: {}", args.circular);
     log::debug!("  Search RC: {}", args.search_rc);
     log::debug!("  Trim primers: {}", args.trim_primers);
+    log::debug!("  Max N fraction: {:.2}", args.max_n_fraction);
 
     // Find all PCR products (with progress bar)
-    let products = find_all_products(&sequences, &primers, &pcr_config, show_progress);
+    let mut products = find_all_products(&sequences, &primers, &pcr_config, show_progress);
+    if args.remove_duplicates {
+        let before = products.len();
+        products = remove_duplicate_products_by_reference(products);
+        let removed = before.saturating_sub(products.len());
+        if removed > 0 {
+            log::info!("Removed {} duplicate product(s) per reference", removed);
+        }
+    }
 
     // Generate summary
     let summary = RunSummary::from_products(&products, sequences.len(), primers.len());

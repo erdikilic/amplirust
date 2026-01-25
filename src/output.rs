@@ -65,7 +65,19 @@ fn write_fasta_gzipped(products: &[PcrProduct], output_path: &Path, threads: usi
 /// Write a single FASTA record
 fn write_fasta_record<W: Write>(writer: &mut W, product: &PcrProduct) -> Result<()> {
     // Write header
-    writeln!(writer, ">{}", product.header())?;
+    let strand_str = match product.strand {
+        Strand::Fwd => "+",
+        Strand::Rc => "-",
+    };
+    writeln!(
+        writer,
+        ">{}\tpos={}-{}\tstrand={}\tlen={}",
+        product.header(),
+        product.original_start,
+        product.original_end,
+        strand_str,
+        product.full_length
+    )?;
 
     // Write sequence with line wrapping
     for chunk in product.sequence.chunks(FASTA_LINE_WIDTH) {
@@ -293,8 +305,8 @@ mod tests {
         write_fasta(&products, temp.path(), 1).unwrap();
         
         let content = std::fs::read_to_string(temp.path()).unwrap();
-        assert!(content.contains(">test_ref_amplicon:test_primer:1"));
-        assert!(content.contains(">test_ref_amplicon:test_primer:2"));
+        assert!(content.contains(">test_ref:test_primer:1"));
+        assert!(content.contains(">test_ref:test_primer:2"));
         assert!(content.contains("ACGTACGTACGT"));
     }
 
@@ -307,7 +319,7 @@ mod tests {
         
         let content = std::fs::read_to_string(temp.path()).unwrap();
         assert!(content.contains("amplicon_id"));
-        assert!(content.contains("test_ref_amplicon:test_primer:1"));
+        assert!(content.contains("test_ref:test_primer:1"));
     }
 
     #[test]

@@ -69,6 +69,7 @@ fn test_find_simple_product() {
         max_len: 100,
         circular: false,
         trim_primers: false,
+        max_n_fraction: 1.0,
     };
 
     let products = find_all_products(&[sequence], &[primer], &config, false);
@@ -105,6 +106,7 @@ fn test_find_product_with_mismatches() {
         max_len: 100,
         circular: false,
         trim_primers: false,
+        max_n_fraction: 1.0,
     };
 
     let products = find_all_products(&[sequence], &[primer], &config, false);
@@ -139,6 +141,7 @@ fn test_circular_genome() {
         max_len: 100,
         circular: true, // Enable circular mode
         trim_primers: false,
+        max_n_fraction: 1.0,
     };
 
     let products = find_all_products(&[sequence], &[primer], &config, false);
@@ -174,6 +177,7 @@ fn test_trim_primers() {
         max_len: 100,
         circular: false,
         trim_primers: false,
+        max_n_fraction: 1.0,
     };
 
     // With trim
@@ -224,6 +228,7 @@ fn test_output_fasta() {
         max_len: 100,
         circular: false,
         trim_primers: false,
+        max_n_fraction: 1.0,
     };
 
     let products = find_all_products(&[sequence], &[primer], &config, false);
@@ -261,6 +266,7 @@ fn test_output_tsv() {
         max_len: 100,
         circular: false,
         trim_primers: false,
+        max_n_fraction: 1.0,
     };
 
     let products = find_all_products(&[sequence], &[primer], &config, false);
@@ -299,6 +305,7 @@ fn test_iupac_primer_matching() {
         max_len: 100,
         circular: false,
         trim_primers: false,
+        max_n_fraction: 1.0,
     };
 
     let products = find_all_products(&[sequence], &[primer], &config, false);
@@ -331,6 +338,7 @@ fn test_multiple_products_same_sequence() {
         max_len: 100,
         circular: false,
         trim_primers: false,
+        max_n_fraction: 1.0,
     };
 
     let products = find_all_products(&[sequence], &[primer], &config, false);
@@ -360,6 +368,7 @@ fn test_length_filter() {
         max_len: 1000,
         circular: false,
         trim_primers: false,
+        max_n_fraction: 1.0,
     };
 
     let products = find_all_products(&[sequence], &[primer], &config, false);

@@ -106,6 +106,7 @@ amplirust -i genome.fasta.gz -p primers.csv -o products.fasta.gz
 | `--min-len <N>` | 50 | Minimum PCR product length |
 | `--max-len <N>` | 5000 | Maximum PCR product length |
 | `--trim-primers` | false | Remove primer sequences from output |
+| `--max-n-fraction <F>` | 0.1 | Maximum fraction of N bases allowed in product sequence (0.0 - 1.0) |
 
 #### Output Options
 
@@ -115,6 +116,7 @@ amplirust -i genome.fasta.gz -p primers.csv -o products.fasta.gz
 | `--tsv <FILE>` | TSV file with detailed statistics |
 | `-v, --verbose` | Increase verbosity (-v, -vv, -vvv) |
 | `-q, --quiet` | Suppress progress bar output |
+| `--remove-duplicates` | Remove duplicate product sequences per reference (canonicalized by reverse complement) |
 
 ## Progress Bar and Summary
 
@@ -136,7 +138,7 @@ Products by primer:
 Output written to: products.fasta
 ```
 
-Use `--quiet` to suppress progress bars (useful for scripting).
+Use `--quiet` to suppress progress bars (useful for scripting). Progress bars are also disabled when any verbosity flag is set (`-v`, `-vv`, `-vvv`).
 
 ## Primer Input Formats
 
@@ -195,15 +197,17 @@ Amplirust supports all standard IUPAC nucleotide codes in primers:
 
 Products are written with descriptive headers:
 ```
->original_header_amplicon:primer_name:1
+>original_header:primer_name:1	pos=0-123	strand=+	len=124
 ACGTACGTACGT...
->original_header_amplicon:primer_name_rc:2
+>original_header:primer_name_rc:2	pos=200-324	strand=-	len=125
 TGCATGCATGCA...
 ```
 
-Header format: `{reference_header}_amplicon:{primer_name}[_rc][_wrap]:{case_number}`
+Header format: `{reference_header}:{primer_name}[_rc][_wrap]:{case_number}\tpos={start}-{end}\tstrand={+|-}\tlen={length}`
 - `_rc` suffix indicates product from reverse complement strand
 - `_wrap` suffix indicates product wraps around circular genome
+- `case_number` increments per reference header (resets for each reference)
+- Output sequences retain their strand orientation; `strand` indicates match orientation.
 
 ### TSV Statistics
 

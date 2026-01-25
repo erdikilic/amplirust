@@ -17,6 +17,8 @@ pub struct PcrConfig {
     pub circular: bool,
     /// Whether to trim primers from output
     pub trim_primers: bool,
+    /// Maximum fraction of N bases allowed in product sequence
+    pub max_n_fraction: f64,
 }
 
 impl Default for PcrConfig {
@@ -27,6 +29,7 @@ impl Default for PcrConfig {
             max_len: 5000,
             circular: false,
             trim_primers: false,
+            max_n_fraction: 1.0,
         }
     }
 }
@@ -56,7 +59,7 @@ pub struct PcrProduct {
     pub original_start: usize,
     /// End position in original sequence (exclusive)
     pub original_end: usize,
-    /// Case number for this reference+primer combination
+    /// Case number for this reference header
     pub case_number: usize,
 }
 
@@ -70,7 +73,7 @@ impl PcrProduct {
         let wrap_suffix = if self.is_circular_wrap { "_wrap" } else { "" };
         
         format!(
-            "{}_amplicon:{}{}{}:{}",
+            "{}:{}{}{}:{}",
             self.reference_header,
             self.primer_name,
             strand_suffix,
@@ -110,8 +113,12 @@ pub fn find_pcr_products(
         record.sequence.clone()
     };
 
-    // Create matcher
-    let mut matcher = PrimerMatcher::new(config.match_config.clone());
+    // Create matcher for forward strand only
+    let fwd_config = MatchConfig {
+        search_rc: false,
+        ..config.match_config.clone()
+    };
+    let mut matcher = PrimerMatcher::new(fwd_config);
 
     // Find forward primer matches
     let fwd_matches = matcher.find_matches(&primer.forward, &search_seq);
@@ -177,6 +184,10 @@ pub fn find_pcr_products(
                 (seq, circular_to_original_pos(product_start, original_len),
                  circular_to_original_pos(product_end, original_len))
             };
+
+            if n_fraction(&sequence) > config.max_n_fraction {
+                continue;
+            }
 
             // Adjust reverse match for storage (with absolute positions)
             let adjusted_rev_match = PrimerMatch {
@@ -317,6 +328,10 @@ fn find_rc_strand_products(
                 (seq, orig_start.min(orig_end), orig_start.max(orig_end))
             };
 
+            if n_fraction(&sequence) > config.max_n_fraction {
+                continue;
+            }
+
             let adjusted_rev_match = PrimerMatch {
                 start: rev_start_abs,
                 end: rev_end_abs,
@@ -402,13 +417,58 @@ pub fn find_all_products(
         pb.finish_with_message("Search complete");
     }
 
-    // Re-assign case numbers globally
     let mut final_products = products;
-    for (i, product) in final_products.iter_mut().enumerate() {
-        product.case_number = i + 1;
+    assign_case_numbers_by_reference(&mut final_products);
+    final_products
+}
+
+/// Remove duplicate product sequences per reference header
+pub fn remove_duplicate_products_by_reference(products: Vec<PcrProduct>) -> Vec<PcrProduct> {
+    use std::collections::{HashMap, HashSet};
+
+    let mut seen: HashMap<String, HashSet<Vec<u8>>> = HashMap::new();
+    let mut deduped = Vec::with_capacity(products.len());
+
+    for product in products {
+        let entry = seen.entry(product.reference_header.clone()).or_default();
+        let canonical = canonical_sequence(&product.sequence);
+        if entry.contains(&canonical) {
+            continue;
+        }
+        entry.insert(canonical);
+        deduped.push(product);
     }
 
-    final_products
+    assign_case_numbers_by_reference(&mut deduped);
+    deduped
+}
+
+fn assign_case_numbers_by_reference(products: &mut [PcrProduct]) {
+    use std::collections::HashMap;
+
+    let mut ref_counts: HashMap<&str, usize> = HashMap::new();
+    for product in products.iter_mut() {
+        let counter = ref_counts.entry(product.reference_header.as_str()).or_insert(0);
+        *counter += 1;
+        product.case_number = *counter;
+    }
+}
+
+fn canonical_sequence(sequence: &[u8]) -> Vec<u8> {
+    let rc = reverse_complement(sequence);
+    if rc.as_slice() < sequence {
+        rc
+    } else {
+        sequence.to_vec()
+    }
+}
+
+fn n_fraction(sequence: &[u8]) -> f64 {
+    if sequence.is_empty() {
+        return 0.0;
+    }
+    let n_count = sequence.iter().filter(|&&b| b == b'N').count();
+    n_count as f64 / sequence.len() as f64
 }
 
 #[cfg(test)]
@@ -440,6 +500,7 @@ mod tests {
             max_len: 100,
             circular: false,
             trim_primers: false,
+            max_n_fraction: 1.0,
         };
 
         let products = find_pcr_products(&record, &primer, &config);
@@ -478,7 +539,7 @@ mod tests {
             case_number: 1,
         };
 
-        assert_eq!(product.header(), "chr1_amplicon:16S:1");
+        assert_eq!(product.header(), "chr1:16S:1");
     }
 
     #[test]
@@ -512,6 +573,122 @@ mod tests {
             case_number: 2,
         };
 
-        assert_eq!(product.header(), "chr1_amplicon:16S_rc:2");
+        assert_eq!(product.header(), "chr1:16S_rc:2");
+    }
+
+    #[test]
+    fn test_remove_duplicate_products_by_reference() {
+        let base = PcrProduct {
+            reference_header: "chr1".to_string(),
+            source_file: "test.fa".to_string(),
+            primer_name: "16S".to_string(),
+            sequence: b"ACGTTGCA".to_vec(),
+            full_length: 8,
+            fwd_match: PrimerMatch {
+                start: 0,
+                end: 4,
+                edit_distance: 0,
+                strand: Strand::Fwd,
+                cigar: "4=".to_string(),
+                identity: 1.0,
+            },
+            rev_match: PrimerMatch {
+                start: 96,
+                end: 100,
+                edit_distance: 0,
+                strand: Strand::Fwd,
+                cigar: "4=".to_string(),
+                identity: 1.0,
+            },
+            strand: Strand::Fwd,
+            is_circular_wrap: false,
+            original_start: 0,
+            original_end: 8,
+            case_number: 1,
+        };
+
+        let mut dup = base.clone();
+        dup.strand = Strand::Rc;
+        dup.sequence = reverse_complement(&base.sequence);
+        let mut other_ref = base.clone();
+        other_ref.reference_header = "chr2".to_string();
+
+        let products = vec![base, dup, other_ref];
+        let deduped = remove_duplicate_products_by_reference(products);
+
+        assert_eq!(deduped.len(), 2);
+        let chr1 = deduped.iter().find(|p| p.reference_header == "chr1").unwrap();
+        let chr2 = deduped.iter().find(|p| p.reference_header == "chr2").unwrap();
+        assert_eq!(chr1.case_number, 1);
+        assert_eq!(chr2.case_number, 1);
+    }
+
+    #[test]
+    fn test_max_n_fraction_filter() {
+        let record = make_record("test", b"AAAACGTNNNNNNNNACGTTTTT");
+        let primer = PrimerPair::new("test", b"ACGT", b"ACGT").unwrap();
+
+        let config = PcrConfig {
+            match_config: MatchConfig {
+                max_errors: 0,
+                min_identity: 1.0,
+                search_rc: false,
+            },
+            min_len: 8,
+            max_len: 100,
+            circular: false,
+            trim_primers: false,
+            max_n_fraction: 0.2,
+        };
+
+        let products = find_pcr_products(&record, &primer, &config);
+        assert!(products.is_empty());
+    }
+
+    #[test]
+    fn test_rc_products_not_reversed() {
+        let mut seq = Vec::new();
+        seq.extend_from_slice(b"AAAA");
+        seq.extend_from_slice(b"AAGC");
+        seq.extend_from_slice(b"CCCC");
+        seq.extend_from_slice(b"TGAA");
+        seq.extend_from_slice(b"GGGG");
+        seq.extend_from_slice(b"TTCA");
+        seq.extend_from_slice(b"TTTT");
+        seq.extend_from_slice(b"GCTT");
+        seq.extend_from_slice(b"CCC");
+
+        let record = make_record("test", &seq);
+        let primer = PrimerPair::new("test", b"AAGC", b"TTCA").unwrap();
+
+        let config = PcrConfig {
+            match_config: MatchConfig {
+                max_errors: 0,
+                min_identity: 1.0,
+                search_rc: true,
+            },
+            min_len: 4,
+            max_len: 200,
+            circular: false,
+            trim_primers: false,
+            max_n_fraction: 1.0,
+        };
+
+        let products = find_pcr_products(&record, &primer, &config);
+        let rc_products: Vec<_> = products
+            .iter()
+            .filter(|p| p.strand == Strand::Rc)
+            .collect();
+
+        assert!(
+            !rc_products.is_empty(),
+            "Expected at least one RC-strand product"
+        );
+
+        for product in rc_products {
+            let slice = &record.sequence[product.original_start..product.original_end];
+            let expected = reverse_complement(slice);
+            assert_eq!(product.sequence, expected);
+        }
     }
 }
