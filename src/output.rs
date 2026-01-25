@@ -10,60 +10,69 @@ use crate::pcr::PcrProduct;
 /// Line width for FASTA sequence wrapping
 const FASTA_LINE_WIDTH: usize = 80;
 
+/// Streaming FASTA writer (plain or gzipped)
+pub enum FastaWriter {
+    Plain(BufWriter<File>),
+    Gzip(Box<dyn gzp::ZWriter>),
+}
+
+impl FastaWriter {
+    pub fn new(output_path: &Path, threads: usize) -> Result<Self> {
+        let is_gzipped = output_path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("gz"));
+
+        let file = File::create(output_path)
+            .with_context(|| format!("Failed to create output file: {}", output_path.display()))?;
+
+        if is_gzipped {
+            let writer: Box<dyn gzp::ZWriter> = ZBuilder::<Gzip, _>::new()
+                .num_threads(threads)
+                .from_writer(file);
+            Ok(FastaWriter::Gzip(writer))
+        } else {
+            Ok(FastaWriter::Plain(BufWriter::with_capacity(64 * 1024, file)))
+        }
+    }
+
+    pub fn write_product(&mut self, product: &PcrProduct) -> Result<()> {
+        match self {
+            FastaWriter::Plain(writer) => write_fasta_record(writer, product),
+            FastaWriter::Gzip(writer) => write_fasta_record(writer, product),
+        }
+    }
+
+    pub fn finish(self) -> Result<()> {
+        match self {
+            FastaWriter::Plain(mut writer) => {
+                writer.flush()?;
+                Ok(())
+            }
+            FastaWriter::Gzip(mut writer) => {
+                writer.finish().with_context(|| "Failed to finalize gzip output")?;
+                Ok(())
+            }
+        }
+    }
+}
+
 /// Write PCR products to a FASTA file (with optional gzip compression)
 pub fn write_fasta(
     products: &[PcrProduct],
     output_path: &Path,
     threads: usize,
 ) -> Result<()> {
-    let is_gzipped = output_path
-        .extension()
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("gz"));
-
-    if is_gzipped {
-        write_fasta_gzipped(products, output_path, threads)
-    } else {
-        write_fasta_plain(products, output_path)
-    }
-}
-
-/// Write FASTA to a plain (uncompressed) file
-fn write_fasta_plain(products: &[PcrProduct], output_path: &Path) -> Result<()> {
-    let file = File::create(output_path)
-        .with_context(|| format!("Failed to create output file: {}", output_path.display()))?;
-    let mut writer = BufWriter::with_capacity(64 * 1024, file);
-
+    let mut writer = FastaWriter::new(output_path, threads)?;
     for product in products {
-        write_fasta_record(&mut writer, product)?;
+        writer.write_product(product)?;
     }
-
-    writer.flush()?;
+    writer.finish()?;
     log::info!("Wrote {} products to {}", products.len(), output_path.display());
     Ok(())
 }
 
-/// Write FASTA to a gzip-compressed file using multi-threaded compression
-fn write_fasta_gzipped(products: &[PcrProduct], output_path: &Path, threads: usize) -> Result<()> {
-    let file = File::create(output_path)
-        .with_context(|| format!("Failed to create output file: {}", output_path.display()))?;
-    
-    let mut writer = ZBuilder::<Gzip, _>::new()
-        .num_threads(threads)
-        .from_writer(file);
-
-    for product in products {
-        write_fasta_record(&mut writer, product)?;
-    }
-
-    writer.finish()
-        .with_context(|| "Failed to finalize gzip output")?;
-    
-    log::info!("Wrote {} products to {} (gzipped)", products.len(), output_path.display());
-    Ok(())
-}
-
 /// Write a single FASTA record
-fn write_fasta_record<W: Write>(writer: &mut W, product: &PcrProduct) -> Result<()> {
+pub fn write_fasta_record<W: Write>(writer: &mut W, product: &PcrProduct) -> Result<()> {
     // Write header
     let strand_str = match product.strand {
         Strand::Fwd => "+",
@@ -107,21 +116,37 @@ fwd_start\tfwd_end\tfwd_mismatches\tfwd_identity\tfwd_cigar\t\
 rev_start\trev_end\trev_mismatches\trev_identity\trev_cigar\t\
 strand\tis_circular_wrap\tproduct_seq";
 
-/// Write TSV statistics file
-pub fn write_tsv(products: &[PcrProduct], output_path: &Path) -> Result<()> {
-    let file = File::create(output_path)
-        .with_context(|| format!("Failed to create TSV file: {}", output_path.display()))?;
-    let mut writer = BufWriter::with_capacity(64 * 1024, file);
+/// Streaming TSV writer
+pub struct TsvWriter {
+    writer: BufWriter<File>,
+}
 
-    // Write header
-    writeln!(writer, "{}", TSV_HEADER)?;
-
-    // Write each product
-    for product in products {
-        write_tsv_record(&mut writer, product)?;
+impl TsvWriter {
+    pub fn new(output_path: &Path) -> Result<Self> {
+        let file = File::create(output_path)
+            .with_context(|| format!("Failed to create TSV file: {}", output_path.display()))?;
+        let mut writer = BufWriter::with_capacity(64 * 1024, file);
+        writeln!(writer, "{}", TSV_HEADER)?;
+        Ok(Self { writer })
     }
 
-    writer.flush()?;
+    pub fn write_product(&mut self, product: &PcrProduct) -> Result<()> {
+        write_tsv_record(&mut self.writer, product)
+    }
+
+    pub fn finish(mut self) -> Result<()> {
+        self.writer.flush()?;
+        Ok(())
+    }
+}
+
+/// Write TSV statistics file
+pub fn write_tsv(products: &[PcrProduct], output_path: &Path) -> Result<()> {
+    let mut writer = TsvWriter::new(output_path)?;
+    for product in products {
+        writer.write_product(product)?;
+    }
+    writer.finish()?;
     log::info!("Wrote TSV statistics to {}", output_path.display());
     Ok(())
 }
@@ -174,6 +199,29 @@ pub struct RunSummary {
 }
 
 impl RunSummary {
+    /// Create summary from pre-aggregated counts
+    pub fn from_counts(
+        total_sequences: usize,
+        total_primers: usize,
+        total_products: usize,
+        primer_counts: std::collections::HashMap<String, usize>,
+        ref_counts: std::collections::HashMap<String, usize>,
+    ) -> Self {
+        let mut products_per_primer: Vec<_> = primer_counts.into_iter().collect();
+        products_per_primer.sort_by(|a, b| b.1.cmp(&a.1));
+
+        let mut products_per_reference: Vec<_> = ref_counts.into_iter().collect();
+        products_per_reference.sort_by(|a, b| b.1.cmp(&a.1));
+
+        Self {
+            total_sequences,
+            total_primers,
+            total_products,
+            products_per_primer,
+            products_per_reference,
+        }
+    }
+
     /// Create summary from products
     pub fn from_products(
         products: &[PcrProduct],

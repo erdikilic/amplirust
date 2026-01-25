@@ -214,61 +214,6 @@ compile_error!("No FASTA parser selected! Enable either 'parser_seqio' or 'parse
 #[cfg(all(feature = "parser_seqio", feature = "parser_needletail"))]
 compile_error!("Multiple FASTA parsers selected! Enable only one of 'parser_seqio' or 'parser_needletail'.");
 
-/// Read all sequences from multiple files (parallel)
-pub fn read_all_sequences(files: &[PathBuf], show_progress: bool) -> Result<Vec<SequenceRecord>> {
-    use indicatif::{ProgressBar, ProgressStyle};
-    use rayon::prelude::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    // Create progress bar if requested
-    let pb = if show_progress && files.len() > 1 {
-        let pb = ProgressBar::new(files.len() as u64);
-        pb.set_style(
-            ProgressStyle::default_bar()
-                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} files ({eta})")
-                .unwrap()
-                .progress_chars("#>-"),
-        );
-        pb.set_message("Reading files");
-        Some(pb)
-    } else {
-        None
-    };
-
-    let completed = AtomicUsize::new(0);
-
-    // Process files in parallel
-    let results: Vec<Result<Vec<SequenceRecord>>> = files
-        .par_iter()
-        .map(|file| {
-            log::debug!("Reading sequences from: {}", file.display());
-            let result = read_sequences_from_file(file);
-            
-            // Update progress
-            let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
-            if let Some(ref pb) = pb {
-                pb.set_position(done as u64);
-            }
-            
-            result
-        })
-        .collect();
-
-    // Finish progress bar
-    if let Some(pb) = pb {
-        pb.finish_with_message("Files loaded");
-    }
-
-    // Collect all records, propagating any errors
-    let mut all_records = Vec::new();
-    for result in results {
-        all_records.extend(result?);
-    }
-
-    log::info!("Total sequences loaded: {}", all_records.len());
-    Ok(all_records)
-}
-
 /// Return the name of the active FASTA parser
 pub fn parser_name() -> &'static str {
     #[cfg(feature = "parser_seqio")]

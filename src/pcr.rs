@@ -366,62 +366,6 @@ fn find_rc_strand_products(
     products
 }
 
-/// Find all PCR products for multiple sequences and primers
-pub fn find_all_products(
-    records: &[SequenceRecord],
-    primers: &[PrimerPair],
-    config: &PcrConfig,
-    show_progress: bool,
-) -> Vec<PcrProduct> {
-    use indicatif::{ProgressBar, ProgressStyle};
-    use rayon::prelude::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    // Create progress bar if requested
-    let pb = if show_progress && records.len() > 1 {
-        let pb = ProgressBar::new(records.len() as u64);
-        pb.set_style(
-            ProgressStyle::default_bar()
-                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} sequences ({eta})")
-                .unwrap()
-                .progress_chars("#>-"),
-        );
-        pb.set_message("Searching");
-        Some(pb)
-    } else {
-        None
-    };
-
-    let completed = AtomicUsize::new(0);
-
-    // Process in parallel
-    let products: Vec<PcrProduct> = records
-        .par_iter()
-        .flat_map(|record| {
-            let result: Vec<_> = primers.iter().flat_map(|primer| {
-                find_pcr_products(record, primer, config)
-            }).collect();
-            
-            // Update progress
-            let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
-            if let Some(ref pb) = pb {
-                pb.set_position(done as u64);
-            }
-            
-            result
-        })
-        .collect();
-
-    // Finish progress bar
-    if let Some(pb) = pb {
-        pb.finish_with_message("Search complete");
-    }
-
-    let mut final_products = products;
-    assign_case_numbers_by_reference(&mut final_products);
-    final_products
-}
-
 /// Remove duplicate product sequences per reference header
 pub fn remove_duplicate_products_by_reference(products: Vec<PcrProduct>) -> Vec<PcrProduct> {
     use std::collections::{HashMap, HashSet};
@@ -454,7 +398,7 @@ fn assign_case_numbers_by_reference(products: &mut [PcrProduct]) {
     }
 }
 
-fn canonical_sequence(sequence: &[u8]) -> Vec<u8> {
+pub fn canonical_sequence(sequence: &[u8]) -> Vec<u8> {
     let rc = reverse_complement(sequence);
     if rc.as_slice() < sequence {
         rc

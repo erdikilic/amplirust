@@ -3,10 +3,10 @@
 use std::path::PathBuf;
 use tempfile::TempDir;
 
-use amplirust::input::{SequenceRecord, expand_input_patterns, read_all_sequences};
+use amplirust::input::{SequenceRecord, expand_input_patterns, read_sequences_from_file};
 use amplirust::matcher::MatchConfig;
 use amplirust::output::{write_fasta, write_tsv};
-use amplirust::pcr::{PcrConfig, find_all_products};
+use amplirust::pcr::{PcrConfig, find_pcr_products};
 use amplirust::primer::{PrimerPair, parse_primers};
 
 fn test_data_path(filename: &str) -> PathBuf {
@@ -22,7 +22,11 @@ fn test_load_fasta() {
     let files = expand_input_patterns(&[path.to_string_lossy().to_string()]).unwrap();
     assert_eq!(files.len(), 1);
 
-    let sequences = read_all_sequences(&files, false).unwrap();
+    let mut sequences = Vec::new();
+    for file in &files {
+        let mut records = read_sequences_from_file(file).unwrap();
+        sequences.append(&mut records);
+    }
     assert_eq!(sequences.len(), 3);
     assert_eq!(sequences[0].header, "test_sequence_1");
     assert_eq!(sequences[1].header, "test_sequence_2_with_product");
@@ -72,7 +76,7 @@ fn test_find_simple_product() {
         max_n_fraction: 1.0,
     };
 
-    let products = find_all_products(&[sequence], &[primer], &config, false);
+    let products = find_pcr_products(&sequence, &primer, &config);
 
     // Should find one product
     assert!(!products.is_empty(), "Should find at least one product");
@@ -109,7 +113,7 @@ fn test_find_product_with_mismatches() {
         max_n_fraction: 1.0,
     };
 
-    let products = find_all_products(&[sequence], &[primer], &config, false);
+    let products = find_pcr_products(&sequence, &primer, &config);
 
     if !products.is_empty() {
         let product = &products[0];
@@ -144,7 +148,7 @@ fn test_circular_genome() {
         max_n_fraction: 1.0,
     };
 
-    let products = find_all_products(&[sequence], &[primer], &config, false);
+    let products = find_pcr_products(&sequence, &primer, &config);
 
     // Should find products in circular mode
     // At minimum should find the ACGT...ACGT within the sequence
@@ -186,18 +190,8 @@ fn test_trim_primers() {
         ..config_no_trim.clone()
     };
 
-    let products_no_trim = find_all_products(
-        std::slice::from_ref(&sequence),
-        std::slice::from_ref(&primer),
-        &config_no_trim,
-        false,
-    );
-    let products_trim = find_all_products(
-        std::slice::from_ref(&sequence),
-        std::slice::from_ref(&primer),
-        &config_trim,
-        false,
-    );
+    let products_no_trim = find_pcr_products(&sequence, &primer, &config_no_trim);
+    let products_trim = find_pcr_products(&sequence, &primer, &config_trim);
 
     if !products_no_trim.is_empty() && !products_trim.is_empty() {
         // Trimmed product should be shorter (no primers)
@@ -231,7 +225,7 @@ fn test_output_fasta() {
         max_n_fraction: 1.0,
     };
 
-    let products = find_all_products(&[sequence], &[primer], &config, false);
+    let products = find_pcr_products(&sequence, &primer, &config);
 
     if !products.is_empty() {
         write_fasta(&products, &output_path, 1).unwrap();
@@ -269,7 +263,7 @@ fn test_output_tsv() {
         max_n_fraction: 1.0,
     };
 
-    let products = find_all_products(&[sequence], &[primer], &config, false);
+    let products = find_pcr_products(&sequence, &primer, &config);
 
     if !products.is_empty() {
         write_tsv(&products, &output_path).unwrap();
@@ -308,7 +302,7 @@ fn test_iupac_primer_matching() {
         max_n_fraction: 1.0,
     };
 
-    let products = find_all_products(&[sequence], &[primer], &config, false);
+    let products = find_pcr_products(&sequence, &primer, &config);
 
     // IUPAC matching should work (ACRT matches ACGT since R matches G)
     // This depends on sassy's IUPAC implementation
@@ -341,7 +335,7 @@ fn test_multiple_products_same_sequence() {
         max_n_fraction: 1.0,
     };
 
-    let products = find_all_products(&[sequence], &[primer], &config, false);
+    let products = find_pcr_products(&sequence, &primer, &config);
 
     // Should find multiple products (several combinations)
     assert!(products.len() > 1, "Should find multiple products");
@@ -371,7 +365,7 @@ fn test_length_filter() {
         max_n_fraction: 1.0,
     };
 
-    let products = find_all_products(&[sequence], &[primer], &config, false);
+    let products = find_pcr_products(&sequence, &primer, &config);
 
     // Should find no products due to length filter
     assert!(

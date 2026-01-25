@@ -2,11 +2,13 @@ use anyhow::{Context, Result};
 use log::LevelFilter;
 
 use amplirust::cli::Args;
-use amplirust::input::{expand_input_patterns, read_all_sequences};
+use amplirust::input::{expand_input_patterns, read_sequences_from_file};
 use amplirust::matcher::MatchConfig;
-use amplirust::output::{write_fasta, write_fasta_stdout, write_tsv, RunSummary};
-use amplirust::pcr::{find_all_products, remove_duplicate_products_by_reference, PcrConfig};
+use amplirust::output::{FastaWriter, RunSummary, TsvWriter, write_fasta_record};
+use amplirust::pcr::{canonical_sequence, find_pcr_products, PcrConfig};
 use amplirust::primer::parse_primers;
+use std::sync::Arc;
+use std::io::Write;
 
 fn main() -> Result<()> {
     // Parse command line arguments
@@ -77,18 +79,6 @@ fn run(args: Args) -> Result<()> {
     let input_files = expand_input_patterns(&args.input)
         .context("Failed to expand input patterns")?;
 
-    // Read all sequences (with progress bar)
-    log::info!("Reading sequences from {} file(s)...", input_files.len());
-    let sequences = read_all_sequences(&input_files, show_progress)
-        .context("Failed to read input sequences")?;
-    
-    if sequences.is_empty() {
-        log::warn!("No sequences found in input files");
-        eprintln!("Warning: No sequences found in input files");
-        return Ok(());
-    }
-    log::info!("Loaded {} sequence(s)", sequences.len());
-
     // Configure PCR product detection
     let match_config = MatchConfig {
         max_errors: args.max_errors,
@@ -114,50 +104,209 @@ fn run(args: Args) -> Result<()> {
     log::debug!("  Trim primers: {}", args.trim_primers);
     log::debug!("  Max N fraction: {:.2}", args.max_n_fraction);
 
-    // Find all PCR products (with progress bar)
-    let mut products = find_all_products(&sequences, &primers, &pcr_config, show_progress);
-    if args.remove_duplicates {
-        let before = products.len();
-        products = remove_duplicate_products_by_reference(products);
-        let removed = before.saturating_sub(products.len());
-        if removed > 0 {
-            log::info!("Removed {} duplicate product(s) per reference", removed);
+    // Process files in parallel and stream products to a single writer
+    use indicatif::{ProgressBar, ProgressStyle};
+    use rayon::prelude::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::mpsc::sync_channel;
+
+    #[derive(Debug)]
+    struct WorkerBatch {
+        products: Vec<amplirust::pcr::PcrProduct>,
+        sequences: usize,
+    }
+
+    #[derive(Debug)]
+    struct RunOutcome {
+        summary: RunSummary,
+        wrote_fasta: bool,
+        wrote_tsv: bool,
+    }
+
+    let pb = if show_progress && input_files.len() > 1 {
+        let pb = ProgressBar::new(input_files.len() as u64);
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} files ({eta})")
+                .unwrap()
+                .progress_chars("#>-"),
+        );
+        pb.set_message("Reading files");
+        Some(pb)
+    } else {
+        None
+    };
+
+    let completed = AtomicUsize::new(0);
+    let (tx, rx) = sync_channel::<WorkerBatch>(threads * 2);
+
+    let primers = Arc::new(primers);
+    let pcr_config = Arc::new(pcr_config);
+    let output_path = args.output.clone();
+    let tsv_path = args.tsv.clone();
+    let remove_duplicates = args.remove_duplicates;
+    let total_primers = primers.len();
+    let consumer_threads = threads;
+
+    let consumer_handle = std::thread::spawn(move || -> Result<RunOutcome> {
+        use std::collections::{HashMap, HashSet};
+        let mut fasta_writer: Option<FastaWriter> = None;
+        let mut tsv_writer: Option<TsvWriter> = None;
+        let mut stdout_writer = if output_path.is_none() {
+            Some(std::io::BufWriter::new(std::io::stdout().lock()))
+        } else {
+            None
+        };
+
+        let mut primer_counts: HashMap<String, usize> = HashMap::new();
+        let mut ref_counts: HashMap<String, usize> = HashMap::new();
+        let mut total_sequences = 0usize;
+        let mut total_products = 0usize;
+        let mut seen: HashMap<String, HashSet<Vec<u8>>> = HashMap::new();
+
+        let mut wrote_fasta = false;
+        let mut wrote_tsv = false;
+
+        while let Ok(batch) = rx.recv() {
+            total_sequences += batch.sequences;
+            for mut product in batch.products {
+                if remove_duplicates {
+                    let canonical = canonical_sequence(&product.sequence);
+                    let entry = seen.entry(product.reference_header.clone()).or_default();
+                    if entry.contains(&canonical) {
+                        continue;
+                    }
+                    entry.insert(canonical);
+                }
+
+                let counter = ref_counts.entry(product.reference_header.clone()).or_insert(0);
+                *counter += 1;
+                product.case_number = *counter;
+
+                total_products += 1;
+                *primer_counts.entry(product.primer_name.clone()).or_insert(0) += 1;
+
+                if let Some(ref path) = output_path {
+                    if fasta_writer.is_none() {
+                        fasta_writer = Some(FastaWriter::new(path, consumer_threads)?);
+                    }
+                    if let Some(ref mut writer) = fasta_writer {
+                        writer.write_product(&product)?;
+                        wrote_fasta = true;
+                    }
+                } else if let Some(ref mut writer) = stdout_writer {
+                    write_fasta_record(writer, &product)?;
+                }
+
+                if let Some(ref path) = tsv_path {
+                    if tsv_writer.is_none() {
+                        tsv_writer = Some(TsvWriter::new(path)?);
+                    }
+                    if let Some(ref mut writer) = tsv_writer {
+                        writer.write_product(&product)?;
+                        wrote_tsv = true;
+                    }
+                }
+            }
+        }
+
+        if let Some(writer) = fasta_writer {
+            writer.finish()?;
+        }
+        if let Some(mut writer) = stdout_writer {
+            writer.flush()?;
+        }
+        if let Some(writer) = tsv_writer {
+            writer.finish()?;
+        }
+
+        let summary = RunSummary::from_counts(
+            total_sequences,
+            total_primers,
+            total_products,
+            primer_counts,
+            ref_counts,
+        );
+
+        Ok(RunOutcome {
+            summary,
+            wrote_fasta,
+            wrote_tsv,
+        })
+    });
+
+    log::info!("Reading sequences from {} file(s)...", input_files.len());
+    let results: Vec<Result<()>> = input_files
+        .par_iter()
+        .map(|file| {
+            let tx = tx.clone();
+            log::debug!("Reading sequences from: {}", file.display());
+            let records = read_sequences_from_file(file)
+                .with_context(|| format!("Failed to read input file: {}", file.display()))?;
+
+            let mut products = Vec::new();
+            for record in &records {
+                for primer in primers.iter() {
+                    products.extend(find_pcr_products(record, primer, pcr_config.as_ref()));
+                }
+            }
+
+            tx.send(WorkerBatch {
+                products,
+                sequences: records.len(),
+            })
+            .context("Failed to send products to writer")?;
+
+            let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
+            if let Some(ref pb) = pb {
+                pb.set_position(done as u64);
+            }
+
+            Ok(())
+        })
+        .collect();
+
+    drop(tx);
+
+    if let Some(pb) = pb {
+        pb.finish_with_message("Files processed");
+    }
+
+    let mut worker_error = None;
+    for result in results {
+        if let Err(err) = result {
+            worker_error = Some(err);
+            break;
         }
     }
 
-    // Generate summary
-    let summary = RunSummary::from_products(&products, sequences.len(), primers.len());
-    
-    // Always print summary to stderr (unless quiet mode and no products)
-    summary.print_stderr();
-    
-    // Also log for verbose mode
-    summary.log_summary();
+    let outcome = consumer_handle
+        .join()
+        .expect("Writer thread panicked")?;
 
-    if products.is_empty() {
+    if let Some(err) = worker_error {
+        return Err(err);
+    }
+
+    // Always print summary to stderr (unless quiet mode and no products)
+    outcome.summary.print_stderr();
+    outcome.summary.log_summary();
+
+    if outcome.summary.total_products == 0 {
         log::warn!("No PCR products found matching the criteria");
         return Ok(());
     }
 
-    // Write output
-    if let Some(ref output_path) = args.output {
-        write_fasta(&products, output_path, threads)
-            .with_context(|| format!("Failed to write output to {}", output_path.display()))?;
-        if show_progress {
-            eprintln!("Output written to: {}", output_path.display());
+    if show_progress {
+        if let Some(ref output_path) = args.output {
+            if outcome.wrote_fasta {
+                eprintln!("Output written to: {}", output_path.display());
+            }
         }
-    } else {
-        // Write to stdout if no output file specified
-        write_fasta_stdout(&products)
-            .context("Failed to write output to stdout")?;
-    }
-
-    // Write TSV if requested
-    if let Some(ref tsv_path) = args.tsv {
-        write_tsv(&products, tsv_path)
-            .with_context(|| format!("Failed to write TSV to {}", tsv_path.display()))?;
-        if show_progress {
-            eprintln!("TSV written to: {}", tsv_path.display());
+        if let Some(ref tsv_path) = args.tsv {
+            if outcome.wrote_tsv {
+                eprintln!("TSV written to: {}", tsv_path.display());
+            }
         }
     }
 
