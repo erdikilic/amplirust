@@ -5,10 +5,10 @@ use amplirust::cli::Args;
 use amplirust::input::{expand_input_patterns, read_sequences_from_file};
 use amplirust::matcher::MatchConfig;
 use amplirust::output::{FastaWriter, RunSummary, TsvWriter, write_fasta_record};
-use amplirust::pcr::{canonical_sequence, find_pcr_products, PcrConfig};
+use amplirust::pcr::{PcrConfig, canonical_sequence, find_pcr_products};
 use amplirust::primer::parse_primers;
-use std::sync::Arc;
 use std::io::Write;
+use std::sync::Arc;
 
 fn main() -> Result<()> {
     // Parse command line arguments
@@ -38,7 +38,7 @@ fn init_logging(verbosity: u8) {
 
 fn run(args: Args) -> Result<()> {
     let show_progress = args.show_progress();
-    
+
     log::info!("Amplirust v{}", env!("CARGO_PKG_VERSION"));
 
     if !(0.0..=1.0).contains(&args.max_n_fraction) {
@@ -51,7 +51,7 @@ fn run(args: Args) -> Result<()> {
     // Configure thread pool
     let threads = args.effective_threads();
     log::info!("Using {} threads", threads);
-    
+
     rayon::ThreadPoolBuilder::new()
         .num_threads(threads)
         .build_global()
@@ -59,8 +59,7 @@ fn run(args: Args) -> Result<()> {
 
     // Parse primers
     log::info!("Parsing primers...");
-    let primers = parse_primers(&args.primers)
-        .context("Failed to parse primers")?;
+    let primers = parse_primers(&args.primers).context("Failed to parse primers")?;
     log::info!("Loaded {} primer pair(s)", primers.len());
 
     for primer in &primers {
@@ -76,8 +75,8 @@ fn run(args: Args) -> Result<()> {
 
     // Expand input file patterns
     log::info!("Finding input files...");
-    let input_files = expand_input_patterns(&args.input)
-        .context("Failed to expand input patterns")?;
+    let input_files =
+        expand_input_patterns(&args.input).context("Failed to expand input patterns")?;
 
     // Configure PCR product detection
     let match_config = MatchConfig {
@@ -179,12 +178,16 @@ fn run(args: Args) -> Result<()> {
                     entry.insert(canonical);
                 }
 
-                let counter = ref_counts.entry(product.reference_header.clone()).or_insert(0);
+                let counter = ref_counts
+                    .entry(product.reference_header.clone())
+                    .or_insert(0);
                 *counter += 1;
                 product.case_number = *counter;
 
                 total_products += 1;
-                *primer_counts.entry(product.primer_name.clone()).or_insert(0) += 1;
+                *primer_counts
+                    .entry(product.primer_name.clone())
+                    .or_insert(0) += 1;
 
                 if let Some(ref path) = output_path {
                     if fasta_writer.is_none() {
@@ -280,9 +283,7 @@ fn run(args: Args) -> Result<()> {
         }
     }
 
-    let outcome = consumer_handle
-        .join()
-        .expect("Writer thread panicked")?;
+    let outcome = consumer_handle.join().expect("Writer thread panicked")?;
 
     if let Some(err) = worker_error {
         return Err(err);

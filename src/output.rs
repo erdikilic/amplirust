@@ -31,7 +31,10 @@ impl FastaWriter {
                 .from_writer(file);
             Ok(FastaWriter::Gzip(writer))
         } else {
-            Ok(FastaWriter::Plain(BufWriter::with_capacity(64 * 1024, file)))
+            Ok(FastaWriter::Plain(BufWriter::with_capacity(
+                64 * 1024,
+                file,
+            )))
         }
     }
 
@@ -49,7 +52,9 @@ impl FastaWriter {
                 Ok(())
             }
             FastaWriter::Gzip(mut writer) => {
-                writer.finish().with_context(|| "Failed to finalize gzip output")?;
+                writer
+                    .finish()
+                    .with_context(|| "Failed to finalize gzip output")?;
                 Ok(())
             }
         }
@@ -57,17 +62,17 @@ impl FastaWriter {
 }
 
 /// Write PCR products to a FASTA file (with optional gzip compression)
-pub fn write_fasta(
-    products: &[PcrProduct],
-    output_path: &Path,
-    threads: usize,
-) -> Result<()> {
+pub fn write_fasta(products: &[PcrProduct], output_path: &Path, threads: usize) -> Result<()> {
     let mut writer = FastaWriter::new(output_path, threads)?;
     for product in products {
         writer.write_product(product)?;
     }
     writer.finish()?;
-    log::info!("Wrote {} products to {}", products.len(), output_path.display());
+    log::info!(
+        "Wrote {} products to {}",
+        products.len(),
+        output_path.display()
+    );
     Ok(())
 }
 
@@ -158,8 +163,7 @@ fn write_tsv_record<W: Write>(writer: &mut W, product: &PcrProduct) -> Result<()
         Strand::Rc => "-",
     };
 
-    let seq_str = std::str::from_utf8(&product.sequence)
-        .unwrap_or("<invalid UTF-8>");
+    let seq_str = std::str::from_utf8(&product.sequence).unwrap_or("<invalid UTF-8>");
 
     writeln!(
         writer,
@@ -234,8 +238,12 @@ impl RunSummary {
         let mut ref_counts: HashMap<String, usize> = HashMap::new();
 
         for product in products {
-            *primer_counts.entry(product.primer_name.clone()).or_default() += 1;
-            *ref_counts.entry(product.reference_header.clone()).or_default() += 1;
+            *primer_counts
+                .entry(product.primer_name.clone())
+                .or_default() += 1;
+            *ref_counts
+                .entry(product.reference_header.clone())
+                .or_default() += 1;
         }
 
         let mut products_per_primer: Vec<_> = primer_counts.into_iter().collect();
@@ -259,7 +267,7 @@ impl RunSummary {
         log::info!("Input sequences: {}", self.total_sequences);
         log::info!("Primer pairs: {}", self.total_primers);
         log::info!("PCR products found: {}", self.total_products);
-        
+
         if !self.products_per_primer.is_empty() {
             log::info!("Products by primer:");
             for (primer, count) in &self.products_per_primer {
@@ -273,7 +281,10 @@ impl RunSummary {
                 log::info!("  {}: {}", ref_name, count);
             }
         } else {
-            log::info!("Products found in {} different references", self.products_per_reference.len());
+            log::info!(
+                "Products found in {} different references",
+                self.products_per_reference.len()
+            );
         }
     }
 
@@ -284,7 +295,7 @@ impl RunSummary {
         eprintln!("Input sequences:  {}", self.total_sequences);
         eprintln!("Primer pairs:     {}", self.total_primers);
         eprintln!("Products found:   {}", self.total_products);
-        
+
         if !self.products_per_primer.is_empty() {
             eprintln!();
             eprintln!("Products by primer:");
@@ -301,7 +312,10 @@ impl RunSummary {
                     eprintln!("  {}: {}", ref_name, count);
                 }
             } else {
-                eprintln!("Products found in {} different references", self.products_per_reference.len());
+                eprintln!(
+                    "Products found in {} different references",
+                    self.products_per_reference.len()
+                );
             }
         }
         eprintln!();
@@ -349,9 +363,9 @@ mod tests {
     fn test_write_fasta_plain() {
         let products = vec![make_test_product(1), make_test_product(2)];
         let temp = NamedTempFile::with_suffix(".fasta").unwrap();
-        
+
         write_fasta(&products, temp.path(), 1).unwrap();
-        
+
         let content = std::fs::read_to_string(temp.path()).unwrap();
         assert!(content.contains(">test_ref:test_primer:1"));
         assert!(content.contains(">test_ref:test_primer:2"));
@@ -362,9 +376,9 @@ mod tests {
     fn test_write_tsv() {
         let products = vec![make_test_product(1)];
         let temp = NamedTempFile::with_suffix(".tsv").unwrap();
-        
+
         write_tsv(&products, temp.path()).unwrap();
-        
+
         let content = std::fs::read_to_string(temp.path()).unwrap();
         assert!(content.contains("amplicon_id"));
         assert!(content.contains("test_ref:test_primer:1"));
@@ -372,11 +386,8 @@ mod tests {
 
     #[test]
     fn test_run_summary() {
-        let products = vec![
-            make_test_product(1),
-            make_test_product(2),
-        ];
-        
+        let products = vec![make_test_product(1), make_test_product(2)];
+
         let summary = RunSummary::from_products(&products, 10, 2);
         assert_eq!(summary.total_products, 2);
         assert_eq!(summary.total_sequences, 10);

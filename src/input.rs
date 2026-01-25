@@ -37,7 +37,8 @@ pub fn expand_input_patterns(patterns: &[String]) -> Result<Vec<PathBuf>> {
             }
 
             for entry in matches {
-                let path = entry.with_context(|| format!("Error reading glob match for '{}'", pattern))?;
+                let path =
+                    entry.with_context(|| format!("Error reading glob match for '{}'", pattern))?;
                 if path.is_file() {
                     files.push(path);
                 }
@@ -75,9 +76,9 @@ pub fn is_gzipped(path: &Path) -> bool {
 
 /// Read and decompress a gzip file using libdeflater
 fn read_gzipped_file(path: &Path) -> Result<Vec<u8>> {
-    let mut file = File::open(path)
-        .with_context(|| format!("Failed to open file: {}", path.display()))?;
-    
+    let mut file =
+        File::open(path).with_context(|| format!("Failed to open file: {}", path.display()))?;
+
     let mut compressed = Vec::new();
     file.read_to_end(&mut compressed)
         .with_context(|| format!("Failed to read file: {}", path.display()))?;
@@ -85,9 +86,9 @@ fn read_gzipped_file(path: &Path) -> Result<Vec<u8>> {
     // Estimate decompressed size (typically 3-10x for text)
     let estimated_size = compressed.len() * 6;
     let mut decompressed = vec![0u8; estimated_size];
-    
+
     let mut decompressor = Decompressor::new();
-    
+
     // Try decompression, grow buffer if needed
     loop {
         match decompressor.gzip_decompress(&compressed, &mut decompressed) {
@@ -109,13 +110,13 @@ fn read_gzipped_file(path: &Path) -> Result<Vec<u8>> {
 
 /// Read a plain (uncompressed) file
 fn read_plain_file(path: &Path) -> Result<Vec<u8>> {
-    let mut file = File::open(path)
-        .with_context(|| format!("Failed to open file: {}", path.display()))?;
-    
+    let mut file =
+        File::open(path).with_context(|| format!("Failed to open file: {}", path.display()))?;
+
     let mut contents = Vec::new();
     file.read_to_end(&mut contents)
         .with_context(|| format!("Failed to read file: {}", path.display()))?;
-    
+
     Ok(contents)
 }
 
@@ -138,20 +139,23 @@ pub fn read_sequences_from_file(path: &Path) -> Result<Vec<SequenceRecord>> {
 #[cfg(feature = "parser_seqio")]
 fn parse_fasta(data: &[u8], source: &Path) -> Result<Vec<SequenceRecord>> {
     use seq_io::fasta::{Reader, Record};
-    
+
     log::trace!("Using seq_io parser");
     let mut reader = Reader::new(data);
     let mut records = Vec::new();
 
     while let Some(result) = reader.next() {
-        let record = result.with_context(|| format!("Error reading FASTA from {}", source.display()))?;
-        
-        let header = record.id()
+        let record =
+            result.with_context(|| format!("Error reading FASTA from {}", source.display()))?;
+
+        let header = record
+            .id()
             .with_context(|| "Invalid UTF-8 in FASTA header")?
             .to_string();
-        
+
         // Collect sequence lines and uppercase
-        let sequence: Vec<u8> = record.seq_lines()
+        let sequence: Vec<u8> = record
+            .seq_lines()
             .flat_map(|line| line.iter().copied())
             .map(|b| b.to_ascii_uppercase())
             .collect();
@@ -173,22 +177,24 @@ fn parse_fasta(data: &[u8], source: &Path) -> Result<Vec<SequenceRecord>> {
 #[cfg(feature = "parser_needletail")]
 fn parse_fasta(data: &[u8], source: &Path) -> Result<Vec<SequenceRecord>> {
     use needletail::parse_fastx_reader;
-    
+
     log::trace!("Using needletail parser");
     let mut reader = parse_fastx_reader(data)
         .with_context(|| format!("Error opening FASTA from {}", source.display()))?;
     let mut records = Vec::new();
 
     while let Some(result) = reader.next() {
-        let record = result.with_context(|| format!("Error reading FASTA from {}", source.display()))?;
-        
+        let record =
+            result.with_context(|| format!("Error reading FASTA from {}", source.display()))?;
+
         // Get header (needletail includes '>' so we need to handle it)
         let header = std::str::from_utf8(record.id())
             .with_context(|| "Invalid UTF-8 in FASTA header")?
             .to_string();
-        
+
         // Get sequence and uppercase
-        let sequence: Vec<u8> = record.seq()
+        let sequence: Vec<u8> = record
+            .seq()
             .iter()
             .copied()
             .map(|b| b.to_ascii_uppercase())
@@ -209,10 +215,14 @@ fn parse_fasta(data: &[u8], source: &Path) -> Result<Vec<SequenceRecord>> {
 // Compile-time check: ensure exactly one parser is selected
 // ============================================================================
 #[cfg(not(any(feature = "parser_seqio", feature = "parser_needletail")))]
-compile_error!("No FASTA parser selected! Enable either 'parser_seqio' or 'parser_needletail' feature.");
+compile_error!(
+    "No FASTA parser selected! Enable either 'parser_seqio' or 'parser_needletail' feature."
+);
 
 #[cfg(all(feature = "parser_seqio", feature = "parser_needletail"))]
-compile_error!("Multiple FASTA parsers selected! Enable only one of 'parser_seqio' or 'parser_needletail'.");
+compile_error!(
+    "Multiple FASTA parsers selected! Enable only one of 'parser_seqio' or 'parser_needletail'."
+);
 
 /// Return the name of the active FASTA parser
 pub fn parser_name() -> &'static str {
@@ -241,7 +251,7 @@ mod tests {
     fn test_parse_fasta() {
         let fasta = b">seq1\nACGT\nTGCA\n>seq2\nAAAA\n";
         let records = parse_fasta(fasta, Path::new("test.fa")).unwrap();
-        
+
         assert_eq!(records.len(), 2);
         assert_eq!(records[0].header, "seq1");
         assert_eq!(records[0].sequence, b"ACGTTGCA");
@@ -253,7 +263,7 @@ mod tests {
     fn test_parse_fasta_multiline() {
         let fasta = b">long_seq\nACGT\nACGT\nACGT\nACGT\n";
         let records = parse_fasta(fasta, Path::new("test.fa")).unwrap();
-        
+
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].sequence, b"ACGTACGTACGTACGT");
     }
@@ -262,7 +272,7 @@ mod tests {
     fn test_uppercase_conversion() {
         let fasta = b">seq\nacgt\n";
         let records = parse_fasta(fasta, Path::new("test.fa")).unwrap();
-        
+
         assert_eq!(records[0].sequence, b"ACGT");
     }
 

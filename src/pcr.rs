@@ -1,8 +1,10 @@
-use sassy::Strand;
 use crate::input::SequenceRecord;
 use crate::matcher::{MatchConfig, PrimerMatch, PrimerMatcher};
 use crate::primer::PrimerPair;
-use crate::utils::{make_circular_searchable, reverse_complement, is_circular_wrap, circular_to_original_pos};
+use crate::utils::{
+    circular_to_original_pos, is_circular_wrap, make_circular_searchable, reverse_complement,
+};
+use sassy::Strand;
 
 /// Configuration for PCR product detection
 #[derive(Debug, Clone)]
@@ -71,14 +73,10 @@ impl PcrProduct {
             Strand::Rc => "_rc",
         };
         let wrap_suffix = if self.is_circular_wrap { "_wrap" } else { "" };
-        
+
         format!(
             "{}:{}{}{}:{}",
-            self.reference_header,
-            self.primer_name,
-            strand_suffix,
-            wrap_suffix,
-            self.case_number
+            self.reference_header, self.primer_name, strand_suffix, wrap_suffix, self.case_number
         )
     }
 
@@ -101,7 +99,7 @@ pub fn find_pcr_products(
 ) -> Vec<PcrProduct> {
     let mut products = Vec::new();
     let original_len = record.sequence.len();
-    
+
     if original_len == 0 {
         return products;
     }
@@ -122,38 +120,38 @@ pub fn find_pcr_products(
 
     // Find forward primer matches
     let fwd_matches = matcher.find_matches(&primer.forward, &search_seq);
-    
+
     // For each forward match, look for reverse primer downstream
     // The reverse primer binds to the opposite strand, so we need to search
     // for its reverse complement in the sequence
     let rev_primer_rc = reverse_complement(&primer.reverse);
-    
+
     for fwd_match in &fwd_matches {
         // Calculate the search region for reverse primer
         // It must be downstream of the forward primer
         let search_start = fwd_match.end;
         let search_end = (fwd_match.start + config.max_len).min(search_seq.len());
-        
+
         if search_start >= search_end {
             continue;
         }
 
         let downstream_seq = &search_seq[search_start..search_end];
-        
+
         // Create a new matcher for downstream search (always forward only here)
         let downstream_config = MatchConfig {
-            search_rc: false,  // We're searching for RC of reverse primer directly
+            search_rc: false, // We're searching for RC of reverse primer directly
             ..config.match_config.clone()
         };
         let mut downstream_matcher = PrimerMatcher::new(downstream_config);
-        
+
         let rev_matches = downstream_matcher.find_matches(&rev_primer_rc, downstream_seq);
-        
+
         for rev_match in rev_matches {
             // Adjust reverse match positions to original sequence coordinates
             let rev_start_abs = search_start + rev_match.start;
             let rev_end_abs = search_start + rev_match.end;
-            
+
             // Calculate product boundaries
             let product_start = fwd_match.start;
             let product_end = rev_end_abs;
@@ -166,23 +164,29 @@ pub fn find_pcr_products(
 
             // Check for circular wrap
             let is_wrap = config.circular && is_circular_wrap(product_end - 1, original_len);
-            
+
             // Extract product sequence
             let (sequence, original_start, original_end) = if config.trim_primers {
                 // Trimmed: region between primers
                 let trim_start = fwd_match.end;
                 let trim_end = rev_start_abs;
                 if trim_start >= trim_end {
-                    continue;  // No sequence between primers
+                    continue; // No sequence between primers
                 }
                 let seq = search_seq[trim_start..trim_end].to_vec();
-                (seq, circular_to_original_pos(trim_start, original_len), 
-                 circular_to_original_pos(trim_end, original_len))
+                (
+                    seq,
+                    circular_to_original_pos(trim_start, original_len),
+                    circular_to_original_pos(trim_end, original_len),
+                )
             } else {
                 // Full product including primers
                 let seq = search_seq[product_start..product_end].to_vec();
-                (seq, circular_to_original_pos(product_start, original_len),
-                 circular_to_original_pos(product_end, original_len))
+                (
+                    seq,
+                    circular_to_original_pos(product_start, original_len),
+                    circular_to_original_pos(product_end, original_len),
+                )
             };
 
             if n_fraction(&sequence) > config.max_n_fraction {
@@ -211,7 +215,7 @@ pub fn find_pcr_products(
                 is_circular_wrap: is_wrap,
                 original_start,
                 original_end,
-                case_number: 0,  // Will be assigned later
+                case_number: 0, // Will be assigned later
             });
         }
     }
@@ -219,7 +223,8 @@ pub fn find_pcr_products(
     // If searching RC mode, also look for products on the reverse strand
     // This means: forward primer on RC strand, reverse primer on forward strand
     if config.match_config.search_rc {
-        let rc_products = find_rc_strand_products(record, primer, config, &search_seq, original_len);
+        let rc_products =
+            find_rc_strand_products(record, primer, config, &search_seq, original_len);
         products.extend(rc_products);
     }
 
@@ -244,7 +249,7 @@ fn find_rc_strand_products(
     // For RC strand products:
     // - Forward primer matches on RC strand (search for RC of forward primer)
     // - Reverse primer matches on forward strand downstream
-    
+
     // Create forward-only matcher
     let fwd_config = MatchConfig {
         search_rc: false,
@@ -255,7 +260,7 @@ fn find_rc_strand_products(
     // For reverse primer on + strand, we search for the reverse primer directly
     // (not its RC, because on the + strand it would bind as-is on the - strand template)
     // Actually, let's think about this more carefully:
-    // 
+    //
     // In PCR on - strand:
     // - Forward primer binds to + strand template (so we search its RC on sequence)
     // - Reverse primer binds to - strand template (so we search it directly)
@@ -267,13 +272,13 @@ fn find_rc_strand_products(
     //
     // If our sequence is the + strand:
     // - Forward primer RC will match where forward primer binds on + strand
-    // - Reverse primer will match where reverse primer binds on - strand... 
+    // - Reverse primer will match where reverse primer binds on - strand...
     //   but we're searching the + strand, so we need RC of reverse primer
     //
     // This is getting complex. Let's simplify:
-    // For RC strand products, we reverse complement the entire sequence and 
+    // For RC strand products, we reverse complement the entire sequence and
     // run the same algorithm. The positions are then adjusted.
-    
+
     let rc_sequence = reverse_complement(search_seq);
     let rc_search_seq = if config.circular {
         make_circular_searchable(&rc_sequence[..original_len], config.max_len)
@@ -284,22 +289,22 @@ fn find_rc_strand_products(
     // Now search on RC sequence with same logic as forward
     let fwd_matches = matcher.find_matches(&primer.forward, &rc_search_seq);
     let rev_primer_rc = reverse_complement(&primer.reverse);
-    
+
     for fwd_match in &fwd_matches {
         let search_start = fwd_match.end;
         let search_end = (fwd_match.start + config.max_len).min(rc_search_seq.len());
-        
+
         if search_start >= search_end {
             continue;
         }
 
         let downstream_seq = &rc_search_seq[search_start..search_end];
         let rev_matches = matcher.find_matches(&rev_primer_rc, downstream_seq);
-        
+
         for rev_match in rev_matches {
             let rev_start_abs = search_start + rev_match.start;
             let rev_end_abs = search_start + rev_match.end;
-            
+
             let product_start = fwd_match.start;
             let product_end = rev_end_abs;
             let product_len = product_end - product_start;
@@ -309,7 +314,7 @@ fn find_rc_strand_products(
             }
 
             let is_wrap = config.circular && is_circular_wrap(product_end - 1, original_len);
-            
+
             let (sequence, original_start, original_end) = if config.trim_primers {
                 let trim_start = fwd_match.end;
                 let trim_end = rev_start_abs;
@@ -318,13 +323,17 @@ fn find_rc_strand_products(
                 }
                 let seq = rc_search_seq[trim_start..trim_end].to_vec();
                 // Convert RC positions back to original coordinates
-                let orig_end = original_len.saturating_sub(circular_to_original_pos(trim_start, original_len));
-                let orig_start = original_len.saturating_sub(circular_to_original_pos(trim_end, original_len));
+                let orig_end =
+                    original_len.saturating_sub(circular_to_original_pos(trim_start, original_len));
+                let orig_start =
+                    original_len.saturating_sub(circular_to_original_pos(trim_end, original_len));
                 (seq, orig_start, orig_end)
             } else {
                 let seq = rc_search_seq[product_start..product_end].to_vec();
-                let orig_end = original_len.saturating_sub(circular_to_original_pos(product_start, original_len));
-                let orig_start = original_len.saturating_sub(circular_to_original_pos(product_end, original_len));
+                let orig_end = original_len
+                    .saturating_sub(circular_to_original_pos(product_start, original_len));
+                let orig_start = original_len
+                    .saturating_sub(circular_to_original_pos(product_end, original_len));
                 (seq, orig_start.min(orig_end), orig_start.max(orig_end))
             };
 
@@ -336,7 +345,7 @@ fn find_rc_strand_products(
                 start: rev_start_abs,
                 end: rev_end_abs,
                 edit_distance: rev_match.edit_distance,
-                strand: Strand::Rc,  // Mark as from RC strand
+                strand: Strand::Rc, // Mark as from RC strand
                 cigar: rev_match.cigar.clone(),
                 identity: rev_match.identity,
             };
@@ -392,7 +401,9 @@ fn assign_case_numbers_by_reference(products: &mut [PcrProduct]) {
 
     let mut ref_counts: HashMap<&str, usize> = HashMap::new();
     for product in products.iter_mut() {
-        let counter = ref_counts.entry(product.reference_header.as_str()).or_insert(0);
+        let counter = ref_counts
+            .entry(product.reference_header.as_str())
+            .or_insert(0);
         *counter += 1;
         product.case_number = *counter;
     }
@@ -433,7 +444,7 @@ mod tests {
         let record = make_record("test", b"AAAACGTACGTACGTACGTTTTTT");
         //                                   ACGT............ACGT (RC=ACGT)
         let primer = PrimerPair::new("test", b"ACGT", b"ACGT").unwrap();
-        
+
         let config = PcrConfig {
             match_config: MatchConfig {
                 max_errors: 0,
@@ -561,8 +572,14 @@ mod tests {
         let deduped = remove_duplicate_products_by_reference(products);
 
         assert_eq!(deduped.len(), 2);
-        let chr1 = deduped.iter().find(|p| p.reference_header == "chr1").unwrap();
-        let chr2 = deduped.iter().find(|p| p.reference_header == "chr2").unwrap();
+        let chr1 = deduped
+            .iter()
+            .find(|p| p.reference_header == "chr1")
+            .unwrap();
+        let chr2 = deduped
+            .iter()
+            .find(|p| p.reference_header == "chr2")
+            .unwrap();
         assert_eq!(chr1.case_number, 1);
         assert_eq!(chr2.case_number, 1);
     }
@@ -619,10 +636,7 @@ mod tests {
         };
 
         let products = find_pcr_products(&record, &primer, &config);
-        let rc_products: Vec<_> = products
-            .iter()
-            .filter(|p| p.strand == Strand::Rc)
-            .collect();
+        let rc_products: Vec<_> = products.iter().filter(|p| p.strand == Strand::Rc).collect();
 
         assert!(
             !rc_products.is_empty(),

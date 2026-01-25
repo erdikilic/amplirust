@@ -113,13 +113,7 @@ mod tests {
 
     #[test]
     fn test_default_values() {
-        let args = Args::parse_from([
-            "amplirust",
-            "-i",
-            "test.fasta",
-            "-p",
-            "test:ACGT:TGCA",
-        ]);
+        let args = Args::parse_from(["amplirust", "-i", "test.fasta", "-p", "test:ACGT:TGCA"]);
         assert_eq!(args.max_errors, 2);
         assert!((args.min_identity - 0.85).abs() < 0.001);
         assert_eq!(args.min_len, 50);

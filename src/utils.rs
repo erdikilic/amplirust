@@ -2,34 +2,34 @@
 /// Index by ASCII value to get complement
 const COMPLEMENT_TABLE: [u8; 128] = {
     let mut table = [b'N'; 128];
-    
+
     // Standard bases
     table[b'A' as usize] = b'T';
     table[b'T' as usize] = b'A';
     table[b'G' as usize] = b'C';
     table[b'C' as usize] = b'G';
-    table[b'U' as usize] = b'A';  // RNA
-    
+    table[b'U' as usize] = b'A'; // RNA
+
     // Lowercase
     table[b'a' as usize] = b't';
     table[b't' as usize] = b'a';
     table[b'g' as usize] = b'c';
     table[b'c' as usize] = b'g';
     table[b'u' as usize] = b'a';
-    
+
     // IUPAC ambiguity codes
-    table[b'R' as usize] = b'Y';  // R = A|G -> Y = T|C
-    table[b'Y' as usize] = b'R';  // Y = T|C -> R = A|G
-    table[b'S' as usize] = b'S';  // S = G|C -> S = C|G (self-complementary)
-    table[b'W' as usize] = b'W';  // W = A|T -> W = T|A (self-complementary)
-    table[b'K' as usize] = b'M';  // K = G|T -> M = C|A
-    table[b'M' as usize] = b'K';  // M = A|C -> K = T|G
-    table[b'B' as usize] = b'V';  // B = C|G|T -> V = G|C|A
-    table[b'V' as usize] = b'B';  // V = A|C|G -> B = T|G|C
-    table[b'D' as usize] = b'H';  // D = A|G|T -> H = T|C|A
-    table[b'H' as usize] = b'D';  // H = A|C|T -> D = T|G|A
-    table[b'N' as usize] = b'N';  // N = any -> N
-    
+    table[b'R' as usize] = b'Y'; // R = A|G -> Y = T|C
+    table[b'Y' as usize] = b'R'; // Y = T|C -> R = A|G
+    table[b'S' as usize] = b'S'; // S = G|C -> S = C|G (self-complementary)
+    table[b'W' as usize] = b'W'; // W = A|T -> W = T|A (self-complementary)
+    table[b'K' as usize] = b'M'; // K = G|T -> M = C|A
+    table[b'M' as usize] = b'K'; // M = A|C -> K = T|G
+    table[b'B' as usize] = b'V'; // B = C|G|T -> V = G|C|A
+    table[b'V' as usize] = b'B'; // V = A|C|G -> B = T|G|C
+    table[b'D' as usize] = b'H'; // D = A|G|T -> H = T|C|A
+    table[b'H' as usize] = b'D'; // H = A|C|T -> D = T|G|A
+    table[b'N' as usize] = b'N'; // N = any -> N
+
     // Lowercase IUPAC
     table[b'r' as usize] = b'y';
     table[b'y' as usize] = b'r';
@@ -42,7 +42,7 @@ const COMPLEMENT_TABLE: [u8; 128] = {
     table[b'd' as usize] = b'h';
     table[b'h' as usize] = b'd';
     table[b'n' as usize] = b'n';
-    
+
     table
 };
 
@@ -58,10 +58,7 @@ pub fn complement(base: u8) -> u8 {
 
 /// Compute the reverse complement of a DNA sequence
 pub fn reverse_complement(seq: &[u8]) -> Vec<u8> {
-    seq.iter()
-        .rev()
-        .map(|&b| complement(b))
-        .collect()
+    seq.iter().rev().map(|&b| complement(b)).collect()
 }
 
 /// Compute reverse complement in place (for efficiency)
@@ -89,11 +86,11 @@ pub fn make_circular_searchable(seq: &[u8], max_product_len: usize) -> Vec<u8> {
     if seq.is_empty() {
         return Vec::new();
     }
-    
+
     // We need to extend by at most max_product_len - 1 to catch wrap-around
     // But also don't extend more than the sequence length itself
     let extend_len = (max_product_len.saturating_sub(1)).min(seq.len());
-    
+
     let mut extended = Vec::with_capacity(seq.len() + extend_len);
     extended.extend_from_slice(seq);
     extended.extend_from_slice(&seq[..extend_len]);

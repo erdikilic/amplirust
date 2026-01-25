@@ -14,7 +14,11 @@ pub struct PrimerPair {
 
 impl PrimerPair {
     /// Create a new primer pair
-    pub fn new(name: impl Into<String>, forward: impl AsRef<[u8]>, reverse: impl AsRef<[u8]>) -> Result<Self> {
+    pub fn new(
+        name: impl Into<String>,
+        forward: impl AsRef<[u8]>,
+        reverse: impl AsRef<[u8]>,
+    ) -> Result<Self> {
         let name = name.into();
         let forward = forward.as_ref().to_ascii_uppercase();
         let reverse = reverse.as_ref().to_ascii_uppercase();
@@ -23,7 +27,11 @@ impl PrimerPair {
         validate_iupac_sequence(&forward, &name, "forward")?;
         validate_iupac_sequence(&reverse, &name, "reverse")?;
 
-        Ok(Self { name, forward, reverse })
+        Ok(Self {
+            name,
+            forward,
+            reverse,
+        })
     }
 
     /// Get forward primer length
@@ -60,7 +68,7 @@ fn validate_iupac_sequence(seq: &[u8], primer_name: &str, direction: &str) -> Re
 /// Parse primers from either a CLI argument string or a CSV file
 pub fn parse_primers(input: &str) -> Result<Vec<PrimerPair>> {
     let path = Path::new(input);
-    
+
     // Check if input is a file path (CSV)
     if path.exists() && path.is_file() {
         parse_primers_from_csv(path)
@@ -81,10 +89,10 @@ fn parse_primers_from_csv(path: &Path) -> Result<Vec<PrimerPair>> {
         .with_context(|| format!("Failed to open primer CSV file: {}", path.display()))?;
 
     let mut primers = Vec::new();
-    
+
     for (i, result) in reader.records().enumerate() {
         let record = result.with_context(|| format!("Error reading CSV row {}", i + 2))?;
-        
+
         if record.len() < 3 {
             bail!(
                 "CSV row {} has {} columns, expected at least 3 (name, forward, reverse)",
@@ -103,7 +111,7 @@ fn parse_primers_from_csv(path: &Path) -> Result<Vec<PrimerPair>> {
 
         let primer = PrimerPair::new(name, forward.as_bytes(), reverse.as_bytes())
             .with_context(|| format!("Error parsing primer at CSV row {}", i + 2))?;
-        
+
         primers.push(primer);
     }
 
@@ -129,7 +137,7 @@ fn parse_primers_from_string(input: &str) -> Result<Vec<PrimerPair>> {
         }
 
         let parts: Vec<&str> = spec.split(':').collect();
-        
+
         if parts.len() != 3 {
             bail!(
                 "Invalid primer specification '{}' (primer {}). \
@@ -153,7 +161,7 @@ fn parse_primers_from_string(input: &str) -> Result<Vec<PrimerPair>> {
 
         let primer = PrimerPair::new(name, forward.as_bytes(), reverse.as_bytes())
             .with_context(|| format!("Error parsing primer specification '{}'", spec))?;
-        
+
         primers.push(primer);
     }
 
