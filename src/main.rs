@@ -299,15 +299,15 @@ fn run(args: Args) -> Result<()> {
     }
 
     if show_progress {
-        if let Some(ref output_path) = args.output {
-            if outcome.wrote_fasta {
-                eprintln!("Output written to: {}", output_path.display());
-            }
+        if let Some(ref output_path) = args.output
+            && outcome.wrote_fasta
+        {
+            eprintln!("Output written to: {}", output_path.display());
         }
-        if let Some(ref tsv_path) = args.tsv {
-            if outcome.wrote_tsv {
-                eprintln!("TSV written to: {}", tsv_path.display());
-            }
+        if let Some(ref tsv_path) = args.tsv
+            && outcome.wrote_tsv
+        {
+            eprintln!("TSV written to: {}", tsv_path.display());
         }
     }
 
