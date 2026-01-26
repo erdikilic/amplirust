@@ -120,11 +120,10 @@ amplirust -i genome.fasta.gz -p primers.csv -o products.fasta.gz
 
 ## Progress Bar and Summary
 
-Amplirust displays progress bars during file reading and PCR searching:
+Amplirust shows a progress bar while reading multiple input files (suppressed with `--quiet` or any `-v` flag). It always prints a run summary to stderr after processing.
 
 ```
 ⠋ [00:00:02] [########################################] 15/15 files (0s)
-⠋ [00:00:05] [########################################] 1250/1250 sequences (0s)
 
 === Amplirust Summary ===
 Input sequences:  1250
@@ -135,10 +134,15 @@ Products by primer:
   16S: 45
   ITS: 2
 
+Products by reference:
+  genome_1: 30
+  genome_2: 17
+
 Output written to: products.fasta
+TSV written to: stats.tsv
 ```
 
-Use `--quiet` to suppress progress bars (useful for scripting). Progress bars are also disabled when any verbosity flag is set (`-v`, `-vv`, `-vvv`).
+Use `--quiet` to suppress the progress bar (useful for scripting). Progress bars are also disabled when any verbosity flag is set (`-v`, `-vv`, `-vvv`).
 
 ## Primer Input Formats
 
@@ -168,28 +172,6 @@ Then use:
 ```bash
 -p primers.csv
 ```
-
-## IUPAC Ambiguity Codes
-
-Amplirust supports all standard IUPAC nucleotide codes in primers:
-
-| Code | Bases | Description |
-|------|-------|-------------|
-| A | A | Adenine |
-| C | C | Cytosine |
-| G | G | Guanine |
-| T | T | Thymine |
-| R | A, G | Purine |
-| Y | C, T | Pyrimidine |
-| S | G, C | Strong |
-| W | A, T | Weak |
-| K | G, T | Keto |
-| M | A, C | Amino |
-| B | C, G, T | Not A |
-| D | A, G, T | Not C |
-| H | A, C, T | Not G |
-| V | A, C, G | Not T |
-| N | A, C, G, T | Any |
 
 ## Output Formats
 
@@ -300,10 +282,3 @@ amplirust \
 ## License
 
 MIT License
-
-## Acknowledgments
-
-- [sassy](https://github.com/RagnarGrootKoerkamp/sassy) - SIMD-accelerated approximate string matching
-- [seq_io](https://github.com/markschl/seq_io) - Fast FASTA parsing
-- [libdeflater](https://github.com/libdeflater/libdeflater) - High-performance gzip compression
-- [gzp](https://github.com/sstadick/gzp) - Multi-threaded gzip compression
