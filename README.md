@@ -179,13 +179,14 @@ Then use:
 
 Products are written with descriptive headers:
 ```
->original_header:primer_name:1	pos=0-123	strand=+	len=124
+>reference_id:primer_name:1	pos=0-123	strand=+	len=124
 ACGTACGTACGT...
->original_header:primer_name_rc:2	pos=200-324	strand=-	len=125
+>reference_id:primer_name_rc:2	pos=200-324	strand=-	len=125
 TGCATGCATGCA...
 ```
 
-Header format: `{reference_header}:{primer_name}[_rc][_wrap]:{case_number}\tpos={start}-{end}\tstrand={+|-}\tlen={length}`
+Header format: `{reference_id}:{primer_name}[_rc][_wrap]:{case_number}\tpos={start}-{end}\tstrand={+|-}\tlen={length}`
+- `reference_id` is the first whitespace-delimited token of the original FASTA header
 - `_rc` suffix indicates product from reverse complement strand
 - `_wrap` suffix indicates product wraps around circular genome
 - `case_number` increments per reference header (resets for each reference)
@@ -197,7 +198,7 @@ The TSV output contains detailed information for each product:
 
 | Column | Description |
 |--------|-------------|
-| amplicon_id | Full header with case number |
+| amplicon_id | Header using `reference_id` with case number |
 | reference_id | Original sequence header |
 | source_file | Input file path |
 | primer_name | Primer pair name |

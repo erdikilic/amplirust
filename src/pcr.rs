@@ -66,6 +66,14 @@ pub struct PcrProduct {
 }
 
 impl PcrProduct {
+    /// Reference identifier (first whitespace-delimited token of the header)
+    pub fn reference_id(&self) -> &str {
+        self.reference_header
+            .split_whitespace()
+            .next()
+            .unwrap_or(self.reference_header.as_str())
+    }
+
     /// Generate the output header for this product
     pub fn header(&self) -> String {
         let strand_suffix = match self.strand {
@@ -76,7 +84,11 @@ impl PcrProduct {
 
         format!(
             "{}:{}{}{}:{}",
-            self.reference_header, self.primer_name, strand_suffix, wrap_suffix, self.case_number
+            self.reference_id(),
+            self.primer_name,
+            strand_suffix,
+            wrap_suffix,
+            self.case_number
         )
     }
 
@@ -495,6 +507,40 @@ mod tests {
         };
 
         assert_eq!(product.header(), "chr1:16S:1");
+    }
+
+    #[test]
+    fn test_product_header_uses_reference_id() {
+        let product = PcrProduct {
+            reference_header: "NZ_CP172019.1 Bifidobacterium adolescentis".to_string(),
+            source_file: "test.fa".to_string(),
+            primer_name: "16S".to_string(),
+            sequence: b"ACGT".to_vec(),
+            full_length: 100,
+            fwd_match: PrimerMatch {
+                start: 0,
+                end: 4,
+                edit_distance: 0,
+                strand: Strand::Fwd,
+                cigar: "4=".to_string(),
+                identity: 1.0,
+            },
+            rev_match: PrimerMatch {
+                start: 96,
+                end: 100,
+                edit_distance: 0,
+                strand: Strand::Fwd,
+                cigar: "4=".to_string(),
+                identity: 1.0,
+            },
+            strand: Strand::Fwd,
+            is_circular_wrap: false,
+            original_start: 0,
+            original_end: 100,
+            case_number: 1,
+        };
+
+        assert_eq!(product.header(), "NZ_CP172019.1:16S:1");
     }
 
     #[test]
