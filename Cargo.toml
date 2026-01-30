@@ -1,6 +1,6 @@
 [package]
 name = "amplirust"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 description = "In-silico PCR primer matching and product extraction tool"
 license = "MIT"
