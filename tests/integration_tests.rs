@@ -373,3 +373,224 @@ fn test_length_filter() {
         "Short products should be filtered by min_len"
     );
 }
+
+#[test]
+fn test_gzip_output_readable() {
+    use flate2::read::GzDecoder;
+    use std::io::Read;
+
+    let temp_dir = TempDir::new().unwrap();
+    let output_path = temp_dir.path().join("output.fasta.gz");
+
+    let sequence = SequenceRecord {
+        header: "test_gzip".to_string(),
+        sequence: b"AAAACGTNNNNNNNNNNNNNNNNNNNNACGTTTTT".to_vec(),
+        source_file: PathBuf::from("test.fasta"),
+    };
+
+    let primer = PrimerPair::new("test", b"ACGT", b"ACGT").unwrap();
+
+    let config = PcrConfig {
+        match_config: MatchConfig {
+            max_errors: 0,
+            min_identity: 1.0,
+            search_rc: false,
+        },
+        min_len: 10,
+        max_len: 100,
+        circular: false,
+        trim_primers: false,
+        max_n_fraction: 1.0,
+    };
+
+    let products = find_pcr_products(&sequence, &primer, &config);
+    assert!(!products.is_empty(), "Should find products for gzip test");
+
+    // Write gzipped output
+    write_fasta(&products, &output_path, 1).unwrap();
+
+    // Verify file exists and has content
+    assert!(output_path.exists(), "Gzip file should exist");
+
+    // Read and decompress to verify
+    let file = std::fs::File::open(&output_path).unwrap();
+    let mut decoder = GzDecoder::new(file);
+    let mut content = String::new();
+    decoder.read_to_string(&mut content).unwrap();
+
+    // Verify content is valid FASTA
+    assert!(content.contains(">"), "Decompressed content should have FASTA header");
+    assert!(content.contains("test_gzip"), "Should contain reference name");
+}
+
+#[test]
+fn test_rc_strand_integration() {
+    // Integration test for RC strand product discovery
+    let sequence = SequenceRecord {
+        header: "rc_test".to_string(),
+        // Sequence designed so product only exists on RC strand
+        // Forward: TTCA, Reverse: GCTT (in original orientation)
+        // RC strand will have: AAGC...TGAA
+        sequence: b"AAAATTCANNNNNNNNNNNNNNNNNNNGCTTTTTT".to_vec(),
+        source_file: PathBuf::from("test.fasta"),
+    };
+
+    let primer = PrimerPair::new("rc_primer", b"AAGC", b"TTCA").unwrap();
+
+    let config = PcrConfig {
+        match_config: MatchConfig {
+            max_errors: 0,
+            min_identity: 1.0,
+            search_rc: true, // Enable RC search
+        },
+        min_len: 4,
+        max_len: 100,
+        circular: false,
+        trim_primers: false,
+        max_n_fraction: 1.0,
+    };
+
+    let products = find_pcr_products(&sequence, &primer, &config);
+
+    // Should find RC strand product
+    assert!(!products.is_empty(), "Should find RC strand product");
+
+    // At least one product should be on RC strand
+    let rc_products: Vec<_> = products
+        .iter()
+        .filter(|p| p.strand == sassy::Strand::Rc)
+        .collect();
+    assert!(
+        !rc_products.is_empty(),
+        "Should have at least one RC strand product"
+    );
+}
+
+#[test]
+fn test_circular_wrap_product() {
+    // Integration test for circular genome with product spanning origin
+    let sequence = SequenceRecord {
+        header: "circular_wrap".to_string(),
+        // Put reverse primer at start, forward at end
+        // Product will wrap around
+        sequence: b"TGCANNNNNNNNNNNNNNNNACGT".to_vec(), // 24bp
+        source_file: PathBuf::from("test.fasta"),
+    };
+
+    let primer = PrimerPair::new("wrap", b"ACGT", b"TGCA").unwrap();
+
+    let config = PcrConfig {
+        match_config: MatchConfig {
+            max_errors: 0,
+            min_identity: 1.0,
+            search_rc: false,
+        },
+        min_len: 4,
+        max_len: 50,
+        circular: true, // Enable circular mode
+        trim_primers: false,
+        max_n_fraction: 1.0,
+    };
+
+    let products = find_pcr_products(&sequence, &primer, &config);
+
+    // Look for wrapping products
+    let wrap_products: Vec<_> = products.iter().filter(|p| p.is_circular_wrap).collect();
+
+    // Should find at least one wrapping product
+    assert!(
+        !wrap_products.is_empty(),
+        "Should find circular wrap product"
+    );
+}
+
+#[test]
+fn test_n_fraction_filtering() {
+    // Integration test for N-fraction filtering
+    let sequence = SequenceRecord {
+        header: "n_filter".to_string(),
+        // 50% N content
+        sequence: b"ACGTNNNNACGT".to_vec(), // 12bp, 4 N's = 33.3%
+        source_file: PathBuf::from("test.fasta"),
+    };
+
+    let primer = PrimerPair::new("test", b"ACGT", b"ACGT").unwrap();
+
+    // With permissive N fraction
+    let config_permissive = PcrConfig {
+        match_config: MatchConfig {
+            max_errors: 0,
+            min_identity: 1.0,
+            search_rc: false,
+        },
+        min_len: 4,
+        max_len: 100,
+        circular: false,
+        trim_primers: false,
+        max_n_fraction: 0.5, // Allow up to 50%
+    };
+
+    let products_permissive = find_pcr_products(&sequence, &primer, &config_permissive);
+    assert!(!products_permissive.is_empty(), "Should find product with permissive N fraction");
+
+    // With strict N fraction
+    let config_strict = PcrConfig {
+        max_n_fraction: 0.1, // Only allow 10%
+        ..config_permissive.clone()
+    };
+
+    let products_strict = find_pcr_products(&sequence, &primer, &config_strict);
+    assert!(
+        products_strict.is_empty(),
+        "Should filter product with strict N fraction"
+    );
+}
+
+#[test]
+fn test_deduplication() {
+    use amplirust::pcr::remove_duplicate_products_by_reference;
+
+    let sequence = SequenceRecord {
+        header: "dedup_test".to_string(),
+        // Sequence with multiple overlapping products
+        sequence: b"ACGTACGTACGTACGTACGT".to_vec(),
+        source_file: PathBuf::from("test.fasta"),
+    };
+
+    let primer = PrimerPair::new("test", b"ACGT", b"ACGT").unwrap();
+
+    let config = PcrConfig {
+        match_config: MatchConfig {
+            max_errors: 0,
+            min_identity: 1.0,
+            search_rc: true, // This may produce RC duplicates
+        },
+        min_len: 4,
+        max_len: 100,
+        circular: false,
+        trim_primers: false,
+        max_n_fraction: 1.0,
+    };
+
+    let products = find_pcr_products(&sequence, &primer, &config);
+
+    if products.len() > 1 {
+        // Test deduplication
+        let deduped = remove_duplicate_products_by_reference(products.clone());
+
+        // Deduplicated should have same or fewer products
+        assert!(
+            deduped.len() <= products.len(),
+            "Deduplication should not increase product count"
+        );
+
+        // Case numbers should be reassigned
+        for (i, product) in deduped.iter().enumerate() {
+            assert_eq!(
+                product.case_number,
+                i + 1,
+                "Case numbers should be sequential after dedup"
+            );
+        }
+    }
+}

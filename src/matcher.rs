@@ -16,7 +16,7 @@ impl Default for MatchConfig {
     fn default() -> Self {
         Self {
             max_errors: 2,
-            min_identity: 0.85,
+            min_identity: 0.0,
             search_rc: false,
         }
     }
@@ -42,9 +42,9 @@ pub struct PrimerMatch {
 impl PrimerMatch {
     /// Create from a sassy Match, calculating identity
     pub fn from_sassy_match(m: &Match, primer_len: usize) -> Self {
-        let alignment_len = primer_len.max(m.text_end - m.text_start);
         let cost = m.cost as usize;
-        let identity = calculate_identity(cost, alignment_len);
+        // Use primer length for identity calculation (standard practice)
+        let identity = calculate_identity(cost, primer_len);
 
         Self {
             start: m.text_start,
@@ -222,5 +222,59 @@ mod tests {
         // Should match ACGT since R matches G
         assert!(!matches.is_empty());
         // assert!(!matches.is_empty() || true); // IUPAC matching behavior depends on sassy
+    }
+
+    #[test]
+    fn test_identity_exactly_at_threshold() {
+        // Test with identity exactly at threshold
+        // 8bp primer with 2 mismatches = 6/8 = 0.75 identity
+        let config = MatchConfig {
+            max_errors: 2,
+            min_identity: 0.75, // Exactly 75%
+            search_rc: false,
+        };
+        let mut matcher = PrimerMatcher::new(config);
+
+        // Primer: ACGTACGT (8bp)
+        // Sequence has ACTTACTT (2 mismatches: G->T twice)
+        // Identity = (8-2)/8 = 0.75
+        let matches = matcher.find_matches(b"ACGTACGT", b"AAAACTTACTTAAA");
+
+        // Should include match at exactly 75% identity (filter uses >=)
+        assert!(
+            !matches.is_empty(),
+            "Should include match at exactly threshold identity"
+        );
+        for m in &matches {
+            assert!(
+                m.identity >= 0.75 - 0.001,
+                "Identity should be at or above threshold"
+            );
+        }
+    }
+
+    #[test]
+    fn test_identity_just_below_threshold() {
+        // Test with identity just below threshold - should be filtered
+        // 8bp primer with 3 mismatches = 5/8 = 0.625 identity
+        let config = MatchConfig {
+            max_errors: 3,
+            min_identity: 0.75, // Require 75%
+            search_rc: false,
+        };
+        let mut matcher = PrimerMatcher::new(config);
+
+        // Primer: ACGTACGT (8bp)
+        // Sequence has ATTTACTT (3 mismatches)
+        // Identity = (8-3)/8 = 0.625
+        let matches = matcher.find_matches(b"ACGTACGT", b"AAAATTTACTTTAAA");
+
+        // All matches should have identity >= 0.75
+        for m in &matches {
+            assert!(
+                m.identity >= 0.75,
+                "Should filter matches below threshold"
+            );
+        }
     }
 }

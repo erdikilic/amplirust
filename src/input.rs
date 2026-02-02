@@ -1,7 +1,9 @@
-use anyhow::{Context, Result, bail};
-use libdeflater::{DecompressionError, Decompressor};
+use anyhow::{bail, Context, Result};
+use flate2::read::MultiGzDecoder;
+use gzp::deflate::Bgzf;
+use gzp::par::decompress::ParDecompressBuilder;
 use std::fs::File;
-use std::io::Read;
+use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 
 /// A sequence record from FASTA input
@@ -74,38 +76,41 @@ pub fn is_gzipped(path: &Path) -> bool {
         .is_some_and(|ext| ext.eq_ignore_ascii_case("gz"))
 }
 
-/// Read and decompress a gzip file using libdeflater
+/// Check if a gzip file is in BGZF format by examining header.
+/// BGZF files have a specific subfield in the gzip header:
+/// - Bytes 12-13: SI1=0x42 ('B'), SI2=0x43 ('C')
+/// This "BC" field contains the compressed block size.
+fn is_bgzf(path: &Path) -> Result<bool> {
+    let mut file = File::open(path)?;
+    let mut header = [0u8; 18];
+
+    if file.read_exact(&mut header).is_err() {
+        return Ok(false);
+    }
+
+    // Check gzip magic (1f 8b) and extra field flag (bit 2 of FLG)
+    if header[0] != 0x1f || header[1] != 0x8b || (header[3] & 0x04) == 0 {
+        return Ok(false);
+    }
+
+    // Check for BGZF subfield identifier "BC" at bytes 12-13
+    // XLEN is at bytes 10-11 (little-endian), subfield starts at 12
+    Ok(header[12] == b'B' && header[13] == b'C')
+}
+
+/// Read and decompress a gzip file using flate2's MultiGzDecoder
+/// MultiGzDecoder handles concatenated/multi-member gzip files correctly
 fn read_gzipped_file(path: &Path) -> Result<Vec<u8>> {
-    let mut file =
+    let file =
         File::open(path).with_context(|| format!("Failed to open file: {}", path.display()))?;
 
-    let mut compressed = Vec::new();
-    file.read_to_end(&mut compressed)
-        .with_context(|| format!("Failed to read file: {}", path.display()))?;
+    let mut decoder = MultiGzDecoder::new(file);
+    let mut decompressed = Vec::new();
+    decoder
+        .read_to_end(&mut decompressed)
+        .with_context(|| format!("Failed to decompress {}", path.display()))?;
 
-    // Estimate decompressed size (typically 3-10x for text)
-    let estimated_size = compressed.len() * 6;
-    let mut decompressed = vec![0u8; estimated_size];
-
-    let mut decompressor = Decompressor::new();
-
-    // Try decompression, grow buffer if needed
-    loop {
-        match decompressor.gzip_decompress(&compressed, &mut decompressed) {
-            Ok(actual_size) => {
-                decompressed.truncate(actual_size);
-                return Ok(decompressed);
-            }
-            Err(DecompressionError::InsufficientSpace) => {
-                // Double the buffer and retry
-                let new_size = decompressed.len() * 2;
-                decompressed.resize(new_size, 0);
-            }
-            Err(e) => {
-                bail!("Failed to decompress {}: {:?}", path.display(), e);
-            }
-        }
-    }
+    Ok(decompressed)
 }
 
 /// Read a plain (uncompressed) file
@@ -134,6 +139,104 @@ pub fn read_sequences_from_file(path: &Path) -> Result<Vec<SequenceRecord>> {
 }
 
 // ============================================================================
+// Streaming FASTA Reader (for memory-efficient single-file processing)
+// ============================================================================
+
+/// Create a streaming FASTA reader that yields sequences lazily.
+/// This enables producer-consumer parallelism without loading entire file into memory.
+/// For BGZF-compressed files, uses parallel decompression via gzp.
+#[cfg(feature = "parser_seqio")]
+pub fn streaming_fasta_reader(
+    path: &Path,
+) -> Result<Box<dyn Iterator<Item = Result<SequenceRecord>> + Send>> {
+    let source_file = path.to_path_buf();
+
+    if is_gzipped(path) {
+        if is_bgzf(path)? {
+            // BGZF: use parallel decompression
+            log::debug!("Detected BGZF format, using parallel decompression");
+            let file = File::open(path)
+                .with_context(|| format!("Failed to open file: {}", path.display()))?;
+            let decoder = ParDecompressBuilder::<Bgzf>::new().from_reader(file);
+            let buf_reader = BufReader::with_capacity(64 * 1024, decoder);
+            Ok(Box::new(StreamingFastaIter::new(buf_reader, source_file)))
+        } else {
+            // Standard gzip: use single-threaded MultiGzDecoder
+            log::debug!("Standard gzip format, using single-threaded decompression");
+            let file = File::open(path)
+                .with_context(|| format!("Failed to open file: {}", path.display()))?;
+            let decoder = MultiGzDecoder::new(file);
+            let buf_reader = BufReader::with_capacity(64 * 1024, decoder);
+            Ok(Box::new(StreamingFastaIter::new(buf_reader, source_file)))
+        }
+    } else {
+        let file = File::open(path)
+            .with_context(|| format!("Failed to open file: {}", path.display()))?;
+        let buf_reader = BufReader::with_capacity(64 * 1024, file);
+        Ok(Box::new(StreamingFastaIter::new(buf_reader, source_file)))
+    }
+}
+
+#[cfg(feature = "parser_seqio")]
+struct StreamingFastaIter<R: Read> {
+    reader: seq_io::fasta::Reader<BufReader<R>>,
+    source_file: PathBuf,
+}
+
+#[cfg(feature = "parser_seqio")]
+impl<R: Read> StreamingFastaIter<R> {
+    fn new(buf_reader: BufReader<R>, source_file: PathBuf) -> Self {
+        Self {
+            reader: seq_io::fasta::Reader::new(buf_reader),
+            source_file,
+        }
+    }
+}
+
+#[cfg(feature = "parser_seqio")]
+impl<R: Read + Send> Iterator for StreamingFastaIter<R> {
+    type Item = Result<SequenceRecord>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        use seq_io::fasta::Record;
+        match self.reader.next() {
+            Some(Ok(record)) => {
+                let header = match record.id() {
+                    Ok(id) => id.to_string(),
+                    Err(e) => return Some(Err(anyhow::anyhow!("Invalid UTF-8 in header: {}", e))),
+                };
+                let mut sequence = record.full_seq().into_owned();
+                sequence.make_ascii_uppercase();
+
+                Some(Ok(SequenceRecord {
+                    header,
+                    sequence,
+                    source_file: self.source_file.clone(),
+                }))
+            }
+            Some(Err(e)) => Some(Err(anyhow::anyhow!("FASTA parse error: {}", e))),
+            None => None,
+        }
+    }
+}
+
+/// Streaming FASTA reader for needletail parser
+#[cfg(feature = "parser_needletail")]
+pub fn streaming_fasta_reader(
+    path: &Path,
+) -> Result<Box<dyn Iterator<Item = Result<SequenceRecord>> + Send>> {
+    // For needletail, we fall back to loading the file since it doesn't support
+    // streaming from a generic Read trait as cleanly as seq_io
+    let contents = if is_gzipped(path) {
+        read_gzipped_file(path)?
+    } else {
+        read_plain_file(path)?
+    };
+    let records = parse_fasta(&contents, path)?;
+    Ok(Box::new(records.into_iter().map(Ok)))
+}
+
+// ============================================================================
 // FASTA Parser: seq_io implementation
 // ============================================================================
 #[cfg(feature = "parser_seqio")]
@@ -153,12 +256,9 @@ fn parse_fasta(data: &[u8], source: &Path) -> Result<Vec<SequenceRecord>> {
             .with_context(|| "Invalid UTF-8 in FASTA header")?
             .to_string();
 
-        // Collect sequence lines and uppercase
-        let sequence: Vec<u8> = record
-            .seq_lines()
-            .flat_map(|line| line.iter().copied())
-            .map(|b| b.to_ascii_uppercase())
-            .collect();
+        // Use full_seq() which handles multi-line sequences efficiently
+        let mut sequence = record.full_seq().into_owned();
+        sequence.make_ascii_uppercase();
 
         records.push(SequenceRecord {
             header,
@@ -248,6 +348,50 @@ mod tests {
     }
 
     #[test]
+    fn test_is_bgzf_standard_gzip() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        // Create a standard gzip file (not BGZF)
+        let mut temp = NamedTempFile::new().unwrap();
+        let encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        let mut encoder = encoder;
+        encoder.write_all(b">seq\nACGT\n").unwrap();
+        let compressed = encoder.finish().unwrap();
+        temp.write_all(&compressed).unwrap();
+        temp.flush().unwrap();
+
+        // Standard gzip should NOT be detected as BGZF
+        assert!(!is_bgzf(temp.path()).unwrap());
+    }
+
+    #[test]
+    fn test_is_bgzf_too_small() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        // File too small to be BGZF
+        let mut temp = NamedTempFile::new().unwrap();
+        temp.write_all(b"tiny").unwrap();
+        temp.flush().unwrap();
+
+        assert!(!is_bgzf(temp.path()).unwrap());
+    }
+
+    #[test]
+    fn test_is_bgzf_plain_file() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        // Plain FASTA file (not gzip at all)
+        let mut temp = NamedTempFile::new().unwrap();
+        temp.write_all(b">seq\nACGT\n").unwrap();
+        temp.flush().unwrap();
+
+        assert!(!is_bgzf(temp.path()).unwrap());
+    }
+
+    #[test]
     fn test_parse_fasta() {
         let fasta = b">seq1\nACGT\nTGCA\n>seq2\nAAAA\n";
         let records = parse_fasta(fasta, Path::new("test.fa")).unwrap();
@@ -280,5 +424,106 @@ mod tests {
     fn test_parser_name() {
         let name = parser_name();
         assert!(name == "seq_io" || name == "needletail");
+    }
+
+    #[test]
+    fn test_nonexistent_file_error() {
+        let result = read_sequences_from_file(Path::new("/nonexistent/path/to/file.fasta"));
+        assert!(result.is_err(), "Should error on nonexistent file");
+
+        let err = result.unwrap_err();
+        let err_str = format!("{:?}", err);
+        assert!(
+            err_str.contains("Failed to open") || err_str.contains("No such file"),
+            "Error should indicate file not found"
+        );
+    }
+
+    #[test]
+    fn test_invalid_fasta_format() {
+        // Data without > header - should fail or return empty
+        let invalid_data = b"ACGTACGT\nTGCATGCA\n";
+        let result = parse_fasta(invalid_data, Path::new("invalid.fa"));
+
+        // Behavior depends on parser - some skip invalid, some error
+        // At minimum, it should not panic
+        match result {
+            Ok(records) => {
+                // If it succeeds, it should have no valid records
+                // (or parser interprets it differently)
+                assert!(
+                    records.is_empty() || records.iter().all(|r| r.header.is_empty()),
+                    "Invalid FASTA should produce no valid records or error"
+                );
+            }
+            Err(_) => {
+                // Error is also acceptable
+            }
+        }
+    }
+
+    #[test]
+    fn test_empty_fasta_file() {
+        // Valid but empty FASTA
+        let empty_data = b"";
+        let result = parse_fasta(empty_data, Path::new("empty.fa"));
+
+        // Parser behavior differs: seq_io returns Ok([]), needletail returns Err
+        // Both are acceptable behaviors for an empty file
+        match result {
+            Ok(records) => assert!(records.is_empty(), "Empty file should produce no records"),
+            Err(_) => {
+                // needletail errors on empty files - this is acceptable
+            }
+        }
+    }
+
+    #[test]
+    fn test_fasta_with_empty_sequence() {
+        // FASTA with header but no sequence
+        let fasta = b">empty_seq\n>next_seq\nACGT\n";
+        let result = parse_fasta(fasta, Path::new("test.fa")).unwrap();
+
+        // Should have 2 records (behavior depends on parser)
+        // At least the second one should have sequence
+        let non_empty: Vec<_> = result.iter().filter(|r| !r.sequence.is_empty()).collect();
+        assert!(
+            !non_empty.is_empty(),
+            "Should have at least one non-empty sequence"
+        );
+    }
+
+    #[test]
+    fn test_expand_nonexistent_file_error() {
+        let result = expand_input_patterns(&["/nonexistent/file.fasta".to_string()]);
+        assert!(result.is_err(), "Should error on nonexistent file");
+    }
+
+    #[test]
+    fn test_expand_empty_patterns() {
+        // Empty patterns should return error
+        let result = expand_input_patterns(&[]);
+        assert!(result.is_err(), "Should error on no input files");
+
+        let result2 = expand_input_patterns(&["".to_string(), "  ".to_string()]);
+        assert!(result2.is_err(), "Should error on empty patterns");
+    }
+
+    #[test]
+    fn test_glob_deduplication() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.fasta");
+        std::fs::write(&file_path, b">seq\nACGT\n").unwrap();
+
+        // Same file referenced twice should be deduplicated
+        let patterns = vec![
+            file_path.to_string_lossy().to_string(),
+            file_path.to_string_lossy().to_string(),
+        ];
+
+        let files = expand_input_patterns(&patterns).unwrap();
+        assert_eq!(files.len(), 1, "Duplicate files should be deduplicated");
     }
 }

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use gzp::{ZBuilder, deflate::Gzip};
+use gzp::{ZBuilder, deflate::Bgzf};
 use sassy::Strand;
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -13,7 +13,7 @@ const FASTA_LINE_WIDTH: usize = 80;
 /// Streaming FASTA writer (plain or gzipped)
 pub enum FastaWriter {
     Plain(BufWriter<File>),
-    Gzip(Box<dyn gzp::ZWriter>),
+    Gzip(Box<dyn gzp::ZWriter<File>>),
 }
 
 impl FastaWriter {
@@ -26,7 +26,9 @@ impl FastaWriter {
             .with_context(|| format!("Failed to create output file: {}", output_path.display()))?;
 
         if is_gzipped {
-            let writer: Box<dyn gzp::ZWriter> = ZBuilder::<Gzip, _>::new()
+            // Use BGZF format for parallel compression and future parallel decompression
+            // BGZF is gzip-compatible (any gzip reader can decompress it)
+            let writer: Box<dyn gzp::ZWriter<File>> = ZBuilder::<Bgzf, _>::new()
                 .num_threads(threads)
                 .from_writer(file);
             Ok(FastaWriter::Gzip(writer))
@@ -163,7 +165,7 @@ fn write_tsv_record<W: Write>(writer: &mut W, product: &PcrProduct) -> Result<()
         Strand::Rc => "-",
     };
 
-    let seq_str = std::str::from_utf8(&product.sequence).unwrap_or("<invalid UTF-8>");
+    let seq_str = String::from_utf8_lossy(&product.sequence);
 
     writeln!(
         writer,
@@ -391,5 +393,163 @@ mod tests {
         let summary = RunSummary::from_products(&products, 10, 2);
         assert_eq!(summary.total_products, 2);
         assert_eq!(summary.total_sequences, 10);
+    }
+
+    #[test]
+    fn test_tsv_all_columns_present() {
+        // Verify all 19 columns in header and data row
+        let product = make_test_product(1);
+        let mut output = Vec::new();
+
+        // Write header manually for test
+        writeln!(output, "{}", TSV_HEADER).unwrap();
+        write_tsv_record(&mut output, &product).unwrap();
+
+        let content = String::from_utf8(output).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+
+        assert_eq!(lines.len(), 2, "Should have header and one data row");
+
+        // Check header has 19 columns
+        let header_cols: Vec<&str> = lines[0].split('\t').collect();
+        assert_eq!(
+            header_cols.len(),
+            19,
+            "Header should have 19 columns, got {}",
+            header_cols.len()
+        );
+
+        // Check data row has 19 columns
+        let data_cols: Vec<&str> = lines[1].split('\t').collect();
+        assert_eq!(
+            data_cols.len(),
+            19,
+            "Data row should have 19 columns, got {}",
+            data_cols.len()
+        );
+
+        // Verify specific column names are present
+        assert!(header_cols.contains(&"amplicon_id"));
+        assert!(header_cols.contains(&"reference_id"));
+        assert!(header_cols.contains(&"source_file"));
+        assert!(header_cols.contains(&"primer_name"));
+        assert!(header_cols.contains(&"product_len"));
+        assert!(header_cols.contains(&"full_len"));
+        assert!(header_cols.contains(&"fwd_start"));
+        assert!(header_cols.contains(&"fwd_end"));
+        assert!(header_cols.contains(&"fwd_mismatches"));
+        assert!(header_cols.contains(&"fwd_identity"));
+        assert!(header_cols.contains(&"fwd_cigar"));
+        assert!(header_cols.contains(&"rev_start"));
+        assert!(header_cols.contains(&"rev_end"));
+        assert!(header_cols.contains(&"rev_mismatches"));
+        assert!(header_cols.contains(&"rev_identity"));
+        assert!(header_cols.contains(&"rev_cigar"));
+        assert!(header_cols.contains(&"strand"));
+        assert!(header_cols.contains(&"is_circular_wrap"));
+        assert!(header_cols.contains(&"product_seq"));
+    }
+
+    #[test]
+    fn test_tsv_special_characters_in_header() {
+        // Test reference header with quotes and spaces (tabs would break TSV format)
+        let mut product = make_test_product(1);
+        product.reference_header = "ref with spaces and \"quotes\" here".to_string();
+
+        let mut output = Vec::new();
+        write_tsv_record(&mut output, &product).unwrap();
+
+        let content = String::from_utf8(output).unwrap();
+
+        // The TSV should still be parseable (tabs separate columns)
+        let cols: Vec<&str> = content.trim().split('\t').collect();
+        assert_eq!(cols.len(), 19, "Should still have 19 columns");
+
+        // The reference_id column should contain the header
+        assert!(content.contains("ref with spaces"));
+        assert!(content.contains("quotes"));
+    }
+
+    #[test]
+    fn test_tsv_tab_in_header_breaks_format() {
+        // Document that tabs in headers break TSV format (expected behavior)
+        let mut product = make_test_product(1);
+        product.reference_header = "ref with\ttab".to_string();
+
+        let mut output = Vec::new();
+        write_tsv_record(&mut output, &product).unwrap();
+
+        let content = String::from_utf8(output).unwrap();
+
+        // Tab in header creates extra column - this is known/expected behavior
+        let cols: Vec<&str> = content.trim().split('\t').collect();
+        assert!(cols.len() > 19, "Tab in header breaks TSV format (creates extra columns)");
+    }
+
+    #[test]
+    fn test_fasta_line_wrapping() {
+        // Sequence > 80bp should wrap correctly
+        let mut product = make_test_product(1);
+        // Create a sequence longer than 80bp
+        product.sequence = b"ACGT".repeat(25).to_vec(); // 100bp
+
+        let mut output = Vec::new();
+        write_fasta_record(&mut output, &product).unwrap();
+
+        let content = String::from_utf8(output).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+
+        // Should have header + at least 2 sequence lines (100bp / 80 = 2 lines)
+        assert!(lines.len() >= 3, "Should have header + wrapped sequence lines");
+
+        // First line is header
+        assert!(lines[0].starts_with('>'));
+
+        // Sequence lines should be max 80 chars
+        for line in &lines[1..] {
+            assert!(
+                line.len() <= 80,
+                "Sequence line should be max 80 chars, got {}",
+                line.len()
+            );
+        }
+
+        // Total sequence length should match
+        let seq_content: String = lines[1..].join("");
+        assert_eq!(seq_content.len(), 100);
+    }
+
+    #[test]
+    fn test_fasta_short_sequence_no_wrap() {
+        // Sequence < 80bp should be on single line
+        let product = make_test_product(1); // 12bp sequence
+
+        let mut output = Vec::new();
+        write_fasta_record(&mut output, &product).unwrap();
+
+        let content = String::from_utf8(output).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+
+        // Should have header + 1 sequence line
+        assert_eq!(lines.len(), 2, "Short sequence should be on one line");
+        assert!(lines[0].starts_with('>'));
+        assert_eq!(lines[1], "ACGTACGTACGT");
+    }
+
+    #[test]
+    fn test_fasta_header_format() {
+        let product = make_test_product(1);
+
+        let mut output = Vec::new();
+        write_fasta_record(&mut output, &product).unwrap();
+
+        let content = String::from_utf8(output).unwrap();
+        let header_line = content.lines().next().unwrap();
+
+        // Header should contain expected fields
+        assert!(header_line.starts_with('>'));
+        assert!(header_line.contains("pos="));
+        assert!(header_line.contains("strand="));
+        assert!(header_line.contains("len="));
     }
 }

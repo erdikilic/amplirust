@@ -27,8 +27,8 @@ pub struct Args {
     #[arg(short = 'k', long, default_value_t = 2)]
     pub max_errors: usize,
 
-    /// Minimum percentage identity for a primer match (0.0 - 1.0)
-    #[arg(long, default_value_t = 0.85)]
+    /// Minimum percentage identity for a primer match (0.0 - 1.0, 0 = disabled)
+    #[arg(long, default_value_t = 0.0)]
     pub min_identity: f64,
 
     /// Also search reverse complement strand for primer matches
@@ -115,7 +115,7 @@ mod tests {
     fn test_default_values() {
         let args = Args::parse_from(["amplirust", "-i", "test.fasta", "-p", "test:ACGT:TGCA"]);
         assert_eq!(args.max_errors, 2);
-        assert!((args.min_identity - 0.85).abs() < 0.001);
+        assert!((args.min_identity - 0.0).abs() < 0.001);
         assert_eq!(args.min_len, 50);
         assert_eq!(args.max_len, 5000);
         assert!(!args.circular);

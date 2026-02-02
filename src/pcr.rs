@@ -5,6 +5,7 @@ use crate::utils::{
     circular_to_original_pos, is_circular_wrap, make_circular_searchable, reverse_complement,
 };
 use sassy::Strand;
+use std::borrow::Cow;
 
 /// Configuration for PCR product detection
 #[derive(Debug, Clone)]
@@ -116,11 +117,11 @@ pub fn find_pcr_products(
         return products;
     }
 
-    // Prepare sequence (extend for circular if needed)
-    let search_seq = if config.circular {
-        make_circular_searchable(&record.sequence, config.max_len)
+    // Prepare sequence (extend for circular if needed, avoid clone for linear)
+    let search_seq: Cow<[u8]> = if config.circular {
+        Cow::Owned(make_circular_searchable(&record.sequence, config.max_len))
     } else {
-        record.sequence.clone()
+        Cow::Borrowed(&record.sequence)
     };
 
     // Create matcher for forward strand only
@@ -150,14 +151,8 @@ pub fn find_pcr_products(
 
         let downstream_seq = &search_seq[search_start..search_end];
 
-        // Create a new matcher for downstream search (always forward only here)
-        let downstream_config = MatchConfig {
-            search_rc: false, // We're searching for RC of reverse primer directly
-            ..config.match_config.clone()
-        };
-        let mut downstream_matcher = PrimerMatcher::new(downstream_config);
-
-        let rev_matches = downstream_matcher.find_matches(&rev_primer_rc, downstream_seq);
+        // Reuse the same matcher for downstream search
+        let rev_matches = matcher.find_matches(&rev_primer_rc, downstream_seq);
 
         for rev_match in rev_matches {
             // Adjust reverse match positions to original sequence coordinates
@@ -235,8 +230,7 @@ pub fn find_pcr_products(
     // If searching RC mode, also look for products on the reverse strand
     // This means: forward primer on RC strand, reverse primer on forward strand
     if config.match_config.search_rc {
-        let rc_products =
-            find_rc_strand_products(record, primer, config, &search_seq, original_len);
+        let rc_products = find_rc_strand_products(record, primer, config, original_len);
         products.extend(rc_products);
     }
 
@@ -253,7 +247,6 @@ fn find_rc_strand_products(
     record: &SequenceRecord,
     primer: &PrimerPair,
     config: &PcrConfig,
-    search_seq: &[u8],
     original_len: usize,
 ) -> Vec<PcrProduct> {
     let mut products = Vec::new();
@@ -291,9 +284,10 @@ fn find_rc_strand_products(
     // For RC strand products, we reverse complement the entire sequence and
     // run the same algorithm. The positions are then adjusted.
 
-    let rc_sequence = reverse_complement(search_seq);
+    // Reverse complement the original sequence, not the extended one
+    let rc_sequence = reverse_complement(&record.sequence);
     let rc_search_seq = if config.circular {
-        make_circular_searchable(&rc_sequence[..original_len], config.max_len)
+        make_circular_searchable(&rc_sequence, config.max_len)
     } else {
         rc_sequence
     };
@@ -335,18 +329,20 @@ fn find_rc_strand_products(
                 }
                 let seq = rc_search_seq[trim_start..trim_end].to_vec();
                 // Convert RC positions back to original coordinates
-                let orig_end =
-                    original_len.saturating_sub(circular_to_original_pos(trim_start, original_len));
-                let orig_start =
-                    original_len.saturating_sub(circular_to_original_pos(trim_end, original_len));
+                // For RC strand: position P on RC corresponds to (original_len - P) on forward
+                let rc_trim_start = circular_to_original_pos(trim_start, original_len);
+                let rc_trim_end = circular_to_original_pos(trim_end, original_len);
+                let orig_start = original_len.saturating_sub(rc_trim_end);
+                let orig_end = original_len.saturating_sub(rc_trim_start);
                 (seq, orig_start, orig_end)
             } else {
                 let seq = rc_search_seq[product_start..product_end].to_vec();
-                let orig_end = original_len
-                    .saturating_sub(circular_to_original_pos(product_start, original_len));
-                let orig_start = original_len
-                    .saturating_sub(circular_to_original_pos(product_end, original_len));
-                (seq, orig_start.min(orig_end), orig_start.max(orig_end))
+                // Convert RC positions back to original coordinates
+                let rc_product_start = circular_to_original_pos(product_start, original_len);
+                let rc_product_end = circular_to_original_pos(product_end, original_len);
+                let orig_start = original_len.saturating_sub(rc_product_end);
+                let orig_end = original_len.saturating_sub(rc_product_start);
+                (seq, orig_start, orig_end)
             };
 
             if n_fraction(&sequence) > config.max_n_fraction {
@@ -693,6 +689,385 @@ mod tests {
             let slice = &record.sequence[product.original_start..product.original_end];
             let expected = reverse_complement(slice);
             assert_eq!(product.sequence, expected);
+        }
+    }
+
+    #[test]
+    fn test_rc_strand_product_discovery() {
+        // Sequence where primers only match on RC strand
+        // Forward primer: ACGT, Reverse primer: TGCA
+        // On + strand we have: ...RC(ACGT)...RC(TGCA)... = ...ACGT...TGCA...
+        // Wait, that's confusing. Let's think clearly:
+        //
+        // For RC strand product discovery, we RC the whole sequence and search.
+        // So if the original sequence is: AAAATGCANNNNNNNNACGTTTTT
+        // The RC is: AAAAACGTNNNNNNNN TGCATTTT
+        // Forward primer ACGT matches RC at position after AAAA
+        // RC of reverse primer TGCA is TGCA, matches RC at position before TTTT
+        //
+        // So on the original + strand, we should have:
+        // TGCA on the left (RC of reverse primer = reverse primer since TGCA RC = TGCA)
+        // ACGT on the right (forward primer RC = ACGT since ACGT RC = ACGT)
+        // But ACGT and TGCA are not palindromes... let me recalculate:
+        // RC(ACGT) = ACGT (palindrome)
+        // RC(TGCA) = TGCA (palindrome)
+        //
+        // Let's use non-palindromic primers:
+        // Forward: AAGC (RC = GCTT)
+        // Reverse: TTCA (RC = TGAA)
+        //
+        // For a product on RC strand:
+        // - Search RC of original sequence
+        // - Find forward primer AAGC
+        // - Find RC of reverse primer (TGAA) downstream
+        //
+        // So on original + strand we need: ...GCTT...TGAA...
+        // (which becomes on RC strand: ...TTCA...AAGC...)
+        // Wait no - if we search on RC strand:
+        // Original: AAAAGCTTNNNNNNNNNTGAATTTT
+        // RC:       AAAATTCANNNNNNNNNAAGCTTTT
+        // On RC, forward primer AAGC appears, and reverse primer RC (TGAA) appears upstream
+        //
+        // Actually the search is: find AAGC on RC, then find RC(TTCA)=TGAA downstream on RC
+        // RC seq:   AAAATTCANNNNNNNNNAAGCTTTT
+        //                            AAGC (forward match)
+        //               TTCA would need RC which is TGAA...
+        //
+        // Let me just use a clear test case:
+        // Original sequence: we want NO match on + strand, only on RC
+        // Put forward primer RC and reverse primer directly on + strand
+        // Original: AAAA GCTT NNNNNNNN TGAA TTTT
+        // For PCR on RC strand:
+        // - RC the original sequence
+        // - Find forward primer AAGC, then find RC(reverse primer) = TGAA downstream
+        //
+        // I need: Original sequence that, when RC'd, has AAGC followed by TGAA
+        // Original: has TTCA followed by GCTT (since RC of TTCA=TGAA, RC of GCTT=AAGC)
+        // So original = NNNN TTCA NNNNNNNN GCTT NNNN
+        // RC =          NNNN AAGC NNNNNNNN TGAA NNNN
+        //                    fwd          RC(rev)
+        // This should give an RC-strand product!
+
+        let record = make_record("rc_only", b"AAAATTCANNNNNNNNNNNNNNNNNNNGCTTTTTT");
+        // RC: AAAAAAGCNNNNNNNNNNNNNNNNNNTGAATTTT
+        //           AAGC=forward primer match
+        //                                TGAA=RC(TTCA)=RC of reverse primer
+        // Product on RC strand!
+
+        let primer = PrimerPair::new("test", b"AAGC", b"TTCA").unwrap();
+
+        let config = PcrConfig {
+            match_config: MatchConfig {
+                max_errors: 0,
+                min_identity: 1.0,
+                search_rc: true,
+            },
+            min_len: 4,
+            max_len: 100,
+            circular: false,
+            trim_primers: false,
+            max_n_fraction: 1.0,
+        };
+
+        let products = find_pcr_products(&record, &primer, &config);
+
+        // Should find at least one product, and it should be on RC strand
+        assert!(!products.is_empty(), "Should discover at least one product");
+
+        let rc_products: Vec<_> = products.iter().filter(|p| p.strand == Strand::Rc).collect();
+        assert!(
+            !rc_products.is_empty(),
+            "Should discover RC strand product"
+        );
+
+        // Verify the product has correct strand marking
+        for product in &rc_products {
+            assert_eq!(product.strand, Strand::Rc);
+            assert_eq!(product.fwd_match.strand, Strand::Rc);
+            assert_eq!(product.rev_match.strand, Strand::Rc);
+        }
+    }
+
+    #[test]
+    fn test_circular_rc_combination() {
+        // Test circular genome with RC strand product that wraps around origin
+        // Create a sequence where:
+        // - The product spans the origin when searched on RC strand
+        // - Circular mode is enabled
+
+        // Original sequence: put end of product at start, beginning at end
+        // For RC product: we need AAGC...TGAA on the RC strand spanning origin
+        // So on original: GCTT at end, TTCA at start (which RC to AAGC...TGAA)
+        // Original: TTCA NNNNN (middle) NNNNN GCTT
+        // RC:       AAGC NNNNN (middle) NNNNN TGAA
+        // When we extend for circular: AAGCNNN...TGAA + AAGCNNN
+        // We should find AAGC -> TGAA product that wraps
+
+        // For wrap: we need product to span origin on RC strand
+        // Put GCTT at very start of original, TTCA at very end
+        // Original: GCTTNNNNNNNNNNNNNNNNNNNNTTCA (28bp)
+        // RC:       TGAANNNNNNNNNNNNNNNNNNNNAAGC
+        // Extended RC: TGAANNN...AAGC + TGAANNN (max_len prefix)
+        // Find AAGC at pos 24 on RC, then find TGAA downstream (in extended part)
+        // Extended has TGAA at pos 28 (which is pos 0 of original RC)
+        // So product: AAGC(24-28) to TGAA(28-32 in extended = 0-4 in original RC coords)
+        // This wraps!
+
+        let record = make_record("circ_rc", b"GCTTNNNNNNNNNNNNNNNNNNNNTTCA");
+
+        let primer = PrimerPair::new("test", b"AAGC", b"TTCA").unwrap();
+
+        let config = PcrConfig {
+            match_config: MatchConfig {
+                max_errors: 0,
+                min_identity: 1.0,
+                search_rc: true,
+            },
+            min_len: 4,
+            max_len: 50,
+            circular: true,
+            trim_primers: false,
+            max_n_fraction: 1.0,
+        };
+
+        let products = find_pcr_products(&record, &primer, &config);
+
+        // Look for products that are both RC strand AND circular wrap
+        let rc_wrap_products: Vec<_> = products
+            .iter()
+            .filter(|p| p.strand == Strand::Rc && p.is_circular_wrap)
+            .collect();
+
+        // Should find at least one product that wraps on RC strand
+        assert!(
+            !rc_wrap_products.is_empty(),
+            "Should find circular wrap product on RC strand. Found products: {:?}",
+            products.iter().map(|p| (p.strand, p.is_circular_wrap)).collect::<Vec<_>>()
+        );
+
+        for product in &rc_wrap_products {
+            assert_eq!(product.strand, Strand::Rc);
+            assert!(product.is_circular_wrap);
+        }
+    }
+
+    #[test]
+    fn test_n_fraction_exact_threshold() {
+        // Product with exactly 50% N's, max_n_fraction = 0.5
+        // n_fraction uses > comparison, so 0.5 fraction should be included with max_n_fraction=0.5
+        let record = make_record("test", b"ACGTNNNNACGT"); // 12 bp, 4 N's = 33.3%
+        let primer = PrimerPair::new("test", b"ACGT", b"ACGT").unwrap();
+
+        // First test: product should be included when n_fraction <= threshold
+        let config = PcrConfig {
+            match_config: MatchConfig {
+                max_errors: 0,
+                min_identity: 1.0,
+                search_rc: false,
+            },
+            min_len: 4,
+            max_len: 100,
+            circular: false,
+            trim_primers: false,
+            max_n_fraction: 0.34, // Just above 33.3%
+        };
+
+        let products = find_pcr_products(&record, &primer, &config);
+        assert!(!products.is_empty(), "Should include product at threshold");
+
+        // Second test: product should be excluded when n_fraction > threshold
+        let config_strict = PcrConfig {
+            max_n_fraction: 0.33, // Just below 33.3%
+            ..config.clone()
+        };
+
+        let products_strict = find_pcr_products(&record, &primer, &config_strict);
+        assert!(
+            products_strict.is_empty(),
+            "Should exclude product above threshold"
+        );
+    }
+
+    #[test]
+    fn test_n_fraction_zero_filters_any_n() {
+        // max_n_fraction = 0.0, product with 1 N should be filtered
+        let record = make_record("test", b"ACGTNACGT"); // 1 N in 9 bp
+        let primer = PrimerPair::new("test", b"ACGT", b"ACGT").unwrap();
+
+        let config = PcrConfig {
+            match_config: MatchConfig {
+                max_errors: 0,
+                min_identity: 1.0,
+                search_rc: false,
+            },
+            min_len: 4,
+            max_len: 100,
+            circular: false,
+            trim_primers: false,
+            max_n_fraction: 0.0, // No N's allowed
+        };
+
+        let products = find_pcr_products(&record, &primer, &config);
+        assert!(
+            products.is_empty(),
+            "Should filter product with any N when max_n_fraction=0"
+        );
+
+        // Control: same sequence without N should work
+        let record_no_n = make_record("test", b"ACGTAACGT");
+        let products_no_n = find_pcr_products(&record_no_n, &primer, &config);
+        assert!(
+            !products_no_n.is_empty(),
+            "Should find product without N's"
+        );
+    }
+
+    #[test]
+    fn test_circular_product_at_boundary() {
+        // Product ending exactly at original_len
+        // In circular mode, products that don't extend past original_len shouldn't be marked as wrap
+        let record = make_record("boundary", b"ACGTNNNNNNNNNNNNNNNNACGT"); // 24 bp
+        let primer = PrimerPair::new("test", b"ACGT", b"ACGT").unwrap();
+
+        let config = PcrConfig {
+            match_config: MatchConfig {
+                max_errors: 0,
+                min_identity: 1.0,
+                search_rc: false,
+            },
+            min_len: 4,
+            max_len: 100,
+            circular: true,
+            trim_primers: false,
+            max_n_fraction: 1.0,
+        };
+
+        let products = find_pcr_products(&record, &primer, &config);
+        assert!(!products.is_empty(), "Should find product");
+
+        // Products that fit entirely within the original sequence should not be wrapping
+        // The check is: is_circular_wrap = product_end-1 >= original_len
+        // For product ending at 24 in 24bp sequence: 23 < 24, so no wrap - correct
+        // For product ending at 25 (in extended), 24 >= 24, so wrap - correct
+        for product in &products {
+            // Verify that is_circular_wrap correlates with whether the product
+            // actually extends beyond the original sequence length
+            let _would_extend_past = product.full_length + product.fwd_match.start > 24;
+            // Note: circular wrapping means the product's search found something
+            // in the extended region (positions >= original_len)
+            if !product.is_circular_wrap {
+                // Non-wrapping products should fit within original sequence
+                assert!(
+                    product.fwd_match.start + product.full_length <= 24,
+                    "Non-wrapping product should fit within original sequence"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_circular_short_sequence() {
+        // Sequence shorter than max_len - extension should be clamped
+        let record = make_record("short", b"ACGTACGT"); // 8 bp
+        let primer = PrimerPair::new("test", b"ACGT", b"ACGT").unwrap();
+
+        let config = PcrConfig {
+            match_config: MatchConfig {
+                max_errors: 0,
+                min_identity: 1.0,
+                search_rc: false,
+            },
+            min_len: 4,
+            max_len: 1000, // Much larger than sequence
+            circular: true,
+            trim_primers: false,
+            max_n_fraction: 1.0,
+        };
+
+        let products = find_pcr_products(&record, &primer, &config);
+        // Should still find products even though sequence is shorter than max_len
+        assert!(!products.is_empty(), "Should find products in short circular sequence");
+    }
+
+    #[test]
+    fn test_trim_primers_adjacent() {
+        // Forward and reverse primers adjacent (no internal sequence)
+        // Should be filtered out when trimming
+        let record = make_record("adjacent", b"AAAACGTTGCATTTT");
+        //                                        ACGT TGCA
+        //                                        fwd  rev (RC=TGCA)
+        // After trimming: nothing between primers
+        let primer = PrimerPair::new("test", b"ACGT", b"TGCA").unwrap();
+
+        let config_trim = PcrConfig {
+            match_config: MatchConfig {
+                max_errors: 0,
+                min_identity: 1.0,
+                search_rc: false,
+            },
+            min_len: 1, // Allow very short products
+            max_len: 100,
+            circular: false,
+            trim_primers: true,
+            max_n_fraction: 1.0,
+        };
+
+        let products_trim = find_pcr_products(&record, &primer, &config_trim);
+        // Adjacent primers with trimming should result in empty product (filtered)
+        assert!(
+            products_trim.is_empty(),
+            "Adjacent primers should be filtered when trimmed (no sequence between)"
+        );
+
+        // Without trimming, should find product
+        let config_no_trim = PcrConfig {
+            trim_primers: false,
+            ..config_trim.clone()
+        };
+        let products_no_trim = find_pcr_products(&record, &primer, &config_no_trim);
+        assert!(
+            !products_no_trim.is_empty(),
+            "Should find product without trimming"
+        );
+    }
+
+    #[test]
+    fn test_trim_primers_circular_wrap() {
+        // Trimmed product that wraps around in circular mode
+        // Product spans origin, and after trimming still represents valid sequence
+        let record = make_record("circ_trim", b"TGCANNNNNNNNNNNNNNNNACGT");
+        //                                      rev               fwd
+        // Circular extension: TGCANNNN...ACGT + TGCANNNN...
+        // Forward at 20, reverse RC (TGCA) at ~28 in extended
+        // Trimmed: from after fwd to before rev in extended coords
+
+        let primer = PrimerPair::new("test", b"ACGT", b"TGCA").unwrap();
+
+        let config = PcrConfig {
+            match_config: MatchConfig {
+                max_errors: 0,
+                min_identity: 1.0,
+                search_rc: false,
+            },
+            min_len: 4,
+            max_len: 50,
+            circular: true,
+            trim_primers: true,
+            max_n_fraction: 1.0,
+        };
+
+        let products = find_pcr_products(&record, &primer, &config);
+        // Should find circular wrapping products even with trimming
+        let wrap_products: Vec<_> = products.iter().filter(|p| p.is_circular_wrap).collect();
+
+        if !wrap_products.is_empty() {
+            for product in wrap_products {
+                // Trimmed product should be shorter than full_length
+                assert!(
+                    product.len() < product.full_length,
+                    "Trimmed product should be shorter than full length"
+                );
+            }
         }
     }
 }

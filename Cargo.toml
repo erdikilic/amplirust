@@ -1,6 +1,6 @@
 [package]
 name = "amplirust"
-version = "0.1.2"
+version = "0.2.0"
 edition = "2024"
 description = "In-silico PCR primer matching and product extraction tool"
 license = "MIT"
@@ -12,10 +12,11 @@ parser_needletail = ["needletail"]
 
 [dependencies]
 sassy = "0.1"                 # Approximate string matching with IUPAC
-libdeflater = "1.25"          # Fast gzip decompression/compression
-gzp = { version = "0.11", default-features = false, features = ["deflate_default"] }  # Multi-threaded gzip compression
+flate2 = "1.0"                 # Gzip decompression (handles multi-member archives)
+gzp = { version = "2.0", default-features = false, features = ["deflate_default"] }  # Multi-threaded gzip compression/decompression
 clap = { version = "4", features = ["derive"] }
 rayon = "1.10"                # Parallel processing
+crossbeam-channel = "0.5"     # MPMC channels for streaming worker pool
 csv = "1.3"                   # CSV primer file parsing
 glob = "0.3"                  # File glob pattern matching
 anyhow = "1.0"                # Error handling
@@ -26,7 +27,7 @@ num_cpus = "1.16"             # CPU count detection
 indicatif = "0.17"            # Progress bars
 
 # Optional FASTA parsers (choose one via features)
-seq_io = { version = "0.3", optional = true }
+seq_io = { version = "0.3.4", optional = true }
 needletail = { version = "0.6", optional = true }
 
 [dev-dependencies]

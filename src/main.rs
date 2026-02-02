@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use log::LevelFilter;
 
 use amplirust::cli::Args;
-use amplirust::input::{expand_input_patterns, read_sequences_from_file};
+use amplirust::input::{expand_input_patterns, read_sequences_from_file, streaming_fasta_reader};
 use amplirust::matcher::MatchConfig;
 use amplirust::output::{FastaWriter, RunSummary, TsvWriter, write_fasta_record};
 use amplirust::pcr::{PcrConfig, canonical_sequence, find_pcr_products};
@@ -45,6 +45,28 @@ fn run(args: Args) -> Result<()> {
         anyhow::bail!(
             "Invalid --max-n-fraction value {} (expected 0.0 - 1.0)",
             args.max_n_fraction
+        );
+    }
+
+    if args.min_len > args.max_len {
+        anyhow::bail!(
+            "--min-len ({}) cannot exceed --max-len ({})",
+            args.min_len,
+            args.max_len
+        );
+    }
+
+    if args.min_identity > 0.0 {
+        if !(0.0..=1.0).contains(&args.min_identity) {
+            anyhow::bail!(
+                "Invalid --min-identity value {} (expected 0.0 - 1.0)",
+                args.min_identity
+            );
+        }
+        eprintln!(
+            "Warning: --min-identity {:.2} is set; matches below {:.1}% identity will be filtered",
+            args.min_identity,
+            args.min_identity * 100.0
         );
     }
 
@@ -96,7 +118,11 @@ fn run(args: Args) -> Result<()> {
 
     log::info!("Searching for PCR products...");
     log::debug!("  Max errors: {}", args.max_errors);
-    log::debug!("  Min identity: {:.1}%", args.min_identity * 100.0);
+    if args.min_identity > 0.0 {
+        log::debug!("  Min identity: {:.1}%", args.min_identity * 100.0);
+    } else {
+        log::debug!("  Min identity: disabled");
+    }
     log::debug!("  Product length: {}-{} bp", args.min_len, args.max_len);
     log::debug!("  Circular mode: {}", args.circular);
     log::debug!("  Search RC: {}", args.search_rc);
@@ -238,36 +264,166 @@ fn run(args: Args) -> Result<()> {
         })
     });
 
-    log::info!("Reading sequences from {} file(s)...", input_files.len());
-    let results: Vec<Result<()>> = input_files
-        .par_iter()
-        .map(|file| {
-            let tx = tx.clone();
-            log::debug!("Reading sequences from: {}", file.display());
-            let records = read_sequences_from_file(file)
-                .with_context(|| format!("Failed to read input file: {}", file.display()))?;
+    // Determine parallelism strategy
+    let use_sequence_parallelism = input_files.len() == 1 && threads > 1;
 
-            let mut products = Vec::new();
-            for record in &records {
-                for primer in primers.iter() {
-                    products.extend(find_pcr_products(record, primer, pcr_config.as_ref()));
+    log::info!("Reading sequences from {} file(s)...", input_files.len());
+
+    let results: Vec<Result<()>> = if use_sequence_parallelism {
+        // Single file: use streaming sequence-level parallelism
+        // Reader thread parses lazily, workers process in parallel via bounded channel
+        log::info!("Using streaming sequence-level parallelism for single file");
+
+        let file = &input_files[0];
+
+        // Bounded channel from reader to workers (~200 sequences max in flight)
+        // This provides backpressure when workers are slow
+        const SEQUENCE_BUFFER_SIZE: usize = 200;
+        let (seq_tx, seq_rx) =
+            crossbeam_channel::bounded::<amplirust::input::SequenceRecord>(SEQUENCE_BUFFER_SIZE);
+
+        // Progress bar (spinner mode - total unknown until file fully read)
+        let processed_count = Arc::new(AtomicUsize::new(0));
+        let seq_pb = if show_progress {
+            let pb = ProgressBar::new_spinner();
+            pb.set_style(
+                ProgressStyle::default_spinner()
+                    .template("{spinner:.green} [{elapsed_precise}] {pos} sequences processed")
+                    .unwrap(),
+            );
+            Some(Arc::new(pb))
+        } else {
+            None
+        };
+
+        // Reader thread: parses sequences lazily, sends to workers
+        let file_clone = file.clone();
+        let reader_handle = std::thread::spawn(move || -> Result<()> {
+            let reader = streaming_fasta_reader(&file_clone)?;
+            for result in reader {
+                let record = result?;
+                if seq_tx.send(record).is_err() {
+                    break; // Workers done or channel closed
                 }
             }
-
-            tx.send(WorkerBatch {
-                products,
-                sequences: records.len(),
-            })
-            .context("Failed to send products to writer")?;
-
-            let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
-            if let Some(ref pb) = pb {
-                pb.set_position(done as u64);
-            }
-
             Ok(())
-        })
-        .collect();
+        });
+
+        // Worker threads: pull from seq_rx, process, send to output channel
+        // Drop the original tx before scope so consumer knows when workers are done
+        let worker_tx = tx.clone();
+        drop(tx);
+
+        rayon::scope(|s| {
+            for _ in 0..threads {
+                let seq_rx = seq_rx.clone();
+                let worker_tx = worker_tx.clone();
+                let primers = Arc::clone(&primers);
+                let pcr_config = Arc::clone(&pcr_config);
+                let seq_pb = seq_pb.clone();
+                let processed_count = Arc::clone(&processed_count);
+
+                s.spawn(move |_| {
+                    while let Ok(record) = seq_rx.recv() {
+                        let count = processed_count.fetch_add(1, Ordering::Relaxed) + 1;
+                        if let Some(ref pb) = seq_pb {
+                            pb.set_position(count as u64);
+                        }
+
+                        let mut products = Vec::new();
+                        for primer in primers.iter() {
+                            products
+                                .extend(find_pcr_products(&record, primer, pcr_config.as_ref()));
+                        }
+
+                        // Send batch of 1 sequence's products (maintains streaming flow)
+                        let _ = worker_tx.send(WorkerBatch {
+                            products,
+                            sequences: 1,
+                        });
+                    }
+                });
+            }
+        });
+
+        // Drop worker_tx to signal consumer that workers are done
+        drop(worker_tx);
+
+        // Wait for reader thread
+        reader_handle
+            .join()
+            .map_err(|_| anyhow::anyhow!("Reader thread panicked"))??;
+
+        let total_sequences = processed_count.load(Ordering::Relaxed);
+        if let Some(ref pb) = seq_pb {
+            pb.finish_with_message(format!("{} sequences processed", total_sequences));
+        }
+
+        // tx already dropped, return empty results (no per-file errors in streaming mode)
+        return match consumer_handle
+            .join()
+            .map_err(|_| anyhow::anyhow!("Writer thread panicked"))?
+        {
+            Ok(outcome) => {
+                // Print summary and output info
+                outcome.summary.print_stderr();
+                outcome.summary.log_summary();
+
+                if outcome.summary.total_products == 0 {
+                    log::warn!("No PCR products found matching the criteria");
+                    return Ok(());
+                }
+
+                if show_progress {
+                    if let Some(ref output_path) = args.output
+                        && outcome.wrote_fasta
+                    {
+                        eprintln!("Output written to: {}", output_path.display());
+                    }
+                    if let Some(ref tsv_path) = args.tsv
+                        && outcome.wrote_tsv
+                    {
+                        eprintln!("TSV written to: {}", tsv_path.display());
+                    }
+                }
+
+                log::info!("Done!");
+                Ok(())
+            }
+            Err(e) => Err(e),
+        };
+    } else {
+        // Multiple files: use file-level parallelism
+        input_files
+            .par_iter()
+            .map(|file| {
+                let tx = tx.clone();
+                log::debug!("Reading sequences from: {}", file.display());
+                let records = read_sequences_from_file(file)
+                    .with_context(|| format!("Failed to read input file: {}", file.display()))?;
+
+                let mut products = Vec::new();
+                for record in &records {
+                    for primer in primers.iter() {
+                        products.extend(find_pcr_products(record, primer, pcr_config.as_ref()));
+                    }
+                }
+
+                tx.send(WorkerBatch {
+                    products,
+                    sequences: records.len(),
+                })
+                .context("Failed to send products to writer")?;
+
+                let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                if let Some(ref pb) = pb {
+                    pb.set_position(done as u64);
+                }
+
+                Ok(())
+            })
+            .collect()
+    };
 
     drop(tx);
 
@@ -283,7 +439,9 @@ fn run(args: Args) -> Result<()> {
         }
     }
 
-    let outcome = consumer_handle.join().expect("Writer thread panicked")?;
+    let outcome = consumer_handle
+        .join()
+        .map_err(|_| anyhow::anyhow!("Writer thread panicked"))??;
 
     if let Some(err) = worker_error {
         return Err(err);

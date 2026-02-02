@@ -9,7 +9,7 @@ A high-performance in-silico PCR tool for primer matching and product extraction
 - **Circular genome support** for plasmids and bacterial chromosomes
 - **Reverse complement strand search** for comprehensive primer detection
 - **Multi-threaded processing** for parallel file reading, searching, and compression
-- **Gzip support** for both input and output files
+- **Gzip/BGZF support** for both input and output files (parallel decompression for BGZF)
 - **Flexible primer input** via command line or CSV file
 
 ## Installation
@@ -95,7 +95,7 @@ amplirust -i genome.fasta.gz -p primers.csv -o products.fasta.gz
 | Option | Default | Description |
 |--------|---------|-------------|
 | `-k, --max-errors <N>` | 2 | Maximum edit distance for primer matching |
-| `--min-identity <FLOAT>` | 0.85 | Minimum identity threshold (0.0-1.0) |
+| `--min-identity <FLOAT>` | 0 (disabled) | Minimum identity threshold (0.0-1.0) |
 | `--search-rc` | false | Also search reverse complement strand |
 | `-t, --threads <N>` | auto | Number of threads (0 = auto-detect) |
 
@@ -230,10 +230,15 @@ The TSV output contains detailed information for each product:
    amplirust -t 8 -i large_genome.fasta -p primers.csv -o out.fasta
    ```
 
-3. **Use gzip output** for large result sets:
+3. **Use BGZF compression** for large single files (enables parallel decompression):
    ```bash
-   amplirust -i genome.fasta -p primers.csv -o products.fasta.gz
+   # Compress with bgzip (from htslib) instead of gzip
+   bgzip -c large_genome.fasta > large_genome.fasta.gz
+
+   # Amplirust auto-detects BGZF and uses parallel decompression
+   amplirust -i large_genome.fasta.gz -p primers.csv -o products.fasta.gz  # input: bgzf
    ```
+   Output `.gz` files are written in BGZF format (gzip-compatible).
 
 4. **Increase max-errors** for degenerate primers or divergent sequences:
    ```bash
