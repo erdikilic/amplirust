@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use flate2::read::MultiGzDecoder;
 use gzp::deflate::Bgzf;
 use gzp::par::decompress::ParDecompressBuilder;
@@ -170,8 +170,8 @@ pub fn streaming_fasta_reader(
             Ok(Box::new(StreamingFastaIter::new(buf_reader, source_file)))
         }
     } else {
-        let file = File::open(path)
-            .with_context(|| format!("Failed to open file: {}", path.display()))?;
+        let file =
+            File::open(path).with_context(|| format!("Failed to open file: {}", path.display()))?;
         let buf_reader = BufReader::with_capacity(64 * 1024, file);
         Ok(Box::new(StreamingFastaIter::new(buf_reader, source_file)))
     }

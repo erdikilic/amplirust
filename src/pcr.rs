@@ -775,10 +775,7 @@ mod tests {
         assert!(!products.is_empty(), "Should discover at least one product");
 
         let rc_products: Vec<_> = products.iter().filter(|p| p.strand == Strand::Rc).collect();
-        assert!(
-            !rc_products.is_empty(),
-            "Should discover RC strand product"
-        );
+        assert!(!rc_products.is_empty(), "Should discover RC strand product");
 
         // Verify the product has correct strand marking
         for product in &rc_products {
@@ -842,7 +839,10 @@ mod tests {
         assert!(
             !rc_wrap_products.is_empty(),
             "Should find circular wrap product on RC strand. Found products: {:?}",
-            products.iter().map(|p| (p.strand, p.is_circular_wrap)).collect::<Vec<_>>()
+            products
+                .iter()
+                .map(|p| (p.strand, p.is_circular_wrap))
+                .collect::<Vec<_>>()
         );
 
         for product in &rc_wrap_products {
@@ -916,10 +916,7 @@ mod tests {
         // Control: same sequence without N should work
         let record_no_n = make_record("test", b"ACGTAACGT");
         let products_no_n = find_pcr_products(&record_no_n, &primer, &config);
-        assert!(
-            !products_no_n.is_empty(),
-            "Should find product without N's"
-        );
+        assert!(!products_no_n.is_empty(), "Should find product without N's");
     }
 
     #[test]
@@ -986,7 +983,10 @@ mod tests {
 
         let products = find_pcr_products(&record, &primer, &config);
         // Should still find products even though sequence is shorter than max_len
-        assert!(!products.is_empty(), "Should find products in short circular sequence");
+        assert!(
+            !products.is_empty(),
+            "Should find products in short circular sequence"
+        );
     }
 
     #[test]

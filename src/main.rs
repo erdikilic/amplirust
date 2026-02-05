@@ -332,8 +332,11 @@ fn run(args: Args) -> Result<()> {
 
                         let mut products = Vec::new();
                         for primer in primers.iter() {
-                            products
-                                .extend(find_pcr_products(&record, primer, pcr_config.as_ref()));
+                            products.extend(find_pcr_products(
+                                &record,
+                                primer,
+                                pcr_config.as_ref(),
+                            ));
                         }
 
                         // Send batch of 1 sequence's products (maintains streaming flow)

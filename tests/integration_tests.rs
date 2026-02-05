@@ -419,8 +419,14 @@ fn test_gzip_output_readable() {
     decoder.read_to_string(&mut content).unwrap();
 
     // Verify content is valid FASTA
-    assert!(content.contains(">"), "Decompressed content should have FASTA header");
-    assert!(content.contains("test_gzip"), "Should contain reference name");
+    assert!(
+        content.contains(">"),
+        "Decompressed content should have FASTA header"
+    );
+    assert!(
+        content.contains("test_gzip"),
+        "Should contain reference name"
+    );
 }
 
 #[test]
@@ -531,7 +537,10 @@ fn test_n_fraction_filtering() {
     };
 
     let products_permissive = find_pcr_products(&sequence, &primer, &config_permissive);
-    assert!(!products_permissive.is_empty(), "Should find product with permissive N fraction");
+    assert!(
+        !products_permissive.is_empty(),
+        "Should find product with permissive N fraction"
+    );
 
     // With strict N fraction
     let config_strict = PcrConfig {

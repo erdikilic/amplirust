@@ -483,7 +483,10 @@ mod tests {
 
         // Tab in header creates extra column - this is known/expected behavior
         let cols: Vec<&str> = content.trim().split('\t').collect();
-        assert!(cols.len() > 19, "Tab in header breaks TSV format (creates extra columns)");
+        assert!(
+            cols.len() > 19,
+            "Tab in header breaks TSV format (creates extra columns)"
+        );
     }
 
     #[test]
@@ -500,7 +503,10 @@ mod tests {
         let lines: Vec<&str> = content.lines().collect();
 
         // Should have header + at least 2 sequence lines (100bp / 80 = 2 lines)
-        assert!(lines.len() >= 3, "Should have header + wrapped sequence lines");
+        assert!(
+            lines.len() >= 3,
+            "Should have header + wrapped sequence lines"
+        );
 
         // First line is header
         assert!(lines[0].starts_with('>'));

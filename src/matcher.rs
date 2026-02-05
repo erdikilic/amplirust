@@ -271,10 +271,7 @@ mod tests {
 
         // All matches should have identity >= 0.75
         for m in &matches {
-            assert!(
-                m.identity >= 0.75,
-                "Should filter matches below threshold"
-            );
+            assert!(m.identity >= 0.75, "Should filter matches below threshold");
         }
     }
 }
