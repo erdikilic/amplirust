@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use log::LevelFilter;
 
 use amplirust::cli::Args;
-use amplirust::input::{expand_input_patterns, read_sequences_from_file, streaming_fasta_reader};
+use amplirust::input::{expand_input_patterns, read_sequences_from_file, streaming_reader};
 use amplirust::matcher::MatchConfig;
 use amplirust::output::{FastaWriter, RunSummary, TsvWriter, write_fasta_record};
 use amplirust::pcr::{PcrConfig, canonical_sequence, find_pcr_products};
@@ -299,7 +299,7 @@ fn run(args: Args) -> Result<()> {
         // Reader thread: parses sequences lazily, sends to workers
         let file_clone = file.clone();
         let reader_handle = std::thread::spawn(move || -> Result<()> {
-            let reader = streaming_fasta_reader(&file_clone)?;
+            let reader = streaming_reader(&file_clone)?;
             for result in reader {
                 let record = result?;
                 if seq_tx.send(record).is_err() {

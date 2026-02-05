@@ -31,6 +31,7 @@ dependencies = [
  "gzp",
  "indicatif",
  "log",
+ "memchr",
  "needletail",
  "num_cpus",
  "rayon",

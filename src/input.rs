@@ -17,6 +17,32 @@ pub struct SequenceRecord {
     pub source_file: PathBuf,
 }
 
+/// Supported input file formats
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum InputFormat {
+    Fasta,
+    Genbank,
+}
+
+/// Detect the input format from file extension.
+/// Returns `None` for unrecognized extensions.
+/// Strips `.gz` suffix before checking the inner extension.
+pub fn detect_format(path: &Path) -> Option<InputFormat> {
+    // Strip .gz if present to get to the real extension
+    let path = if is_gzipped(path) {
+        Path::new(path.file_stem()?)
+    } else {
+        path
+    };
+
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    match ext.as_str() {
+        "fasta" | "fa" | "fna" | "ffn" | "faa" | "frn" | "fas" => Some(InputFormat::Fasta),
+        "gb" | "gbk" | "gbff" | "genbank" | "gbf" => Some(InputFormat::Genbank),
+        _ => None,
+    }
+}
+
 /// Expand input patterns to a list of files
 /// Supports: single files, comma-separated lists, glob patterns
 pub fn expand_input_patterns(patterns: &[String]) -> Result<Vec<PathBuf>> {
@@ -66,6 +92,20 @@ pub fn expand_input_patterns(patterns: &[String]) -> Result<Vec<PathBuf>> {
     let mut seen = std::collections::HashSet::new();
     files.retain(|f| seen.insert(f.clone()));
 
+    // Filter out files with unrecognized extensions
+    files.retain(|f| {
+        if detect_format(f).is_some() {
+            true
+        } else {
+            log::warn!("Skipping '{}': unrecognized file extension", f.display());
+            false
+        }
+    });
+
+    if files.is_empty() {
+        bail!("No supported sequence files found");
+    }
+
     log::info!("Found {} input file(s)", files.len());
     Ok(files)
 }
@@ -79,7 +119,7 @@ pub fn is_gzipped(path: &Path) -> bool {
 /// Check if a gzip file is in BGZF format by examining header.
 /// BGZF files have a specific subfield in the gzip header:
 /// - Bytes 12-13: SI1=0x42 ('B'), SI2=0x43 ('C')
-/// This "BC" field contains the compressed block size.
+///   This "BC" field contains the compressed block size.
 fn is_bgzf(path: &Path) -> Result<bool> {
     let mut file = File::open(path)?;
     let mut header = [0u8; 18];
@@ -99,13 +139,18 @@ fn is_bgzf(path: &Path) -> Result<bool> {
 }
 
 /// Read and decompress a gzip file using flate2's MultiGzDecoder
-/// MultiGzDecoder handles concatenated/multi-member gzip files correctly
+/// MultiGzDecoder handles concatenated/multi-member gzip files correctly.
+/// Pre-allocates based on compressed size × estimated compression ratio
+/// to avoid repeated reallocation during decompression.
 fn read_gzipped_file(path: &Path) -> Result<Vec<u8>> {
     let file =
         File::open(path).with_context(|| format!("Failed to open file: {}", path.display()))?;
+    let compressed_size = file.metadata().map(|m| m.len()).unwrap_or(0) as usize;
 
     let mut decoder = MultiGzDecoder::new(file);
-    let mut decompressed = Vec::new();
+    // Pre-allocate with estimated decompression ratio of ~4x (typical for genomic data).
+    let estimated = compressed_size.saturating_mul(4);
+    let mut decompressed = Vec::with_capacity(estimated);
     decoder
         .read_to_end(&mut decompressed)
         .with_context(|| format!("Failed to decompress {}", path.display()))?;
@@ -125,8 +170,11 @@ fn read_plain_file(path: &Path) -> Result<Vec<u8>> {
     Ok(contents)
 }
 
-/// Read all sequences from a single FASTA file
+/// Read all sequences from a single file (FASTA or GenBank)
 pub fn read_sequences_from_file(path: &Path) -> Result<Vec<SequenceRecord>> {
+    let format = detect_format(path)
+        .ok_or_else(|| anyhow::anyhow!("Unsupported format: {}", path.display()))?;
+
     // Read file contents (decompress if gzipped)
     let contents = if is_gzipped(path) {
         read_gzipped_file(path)?
@@ -134,21 +182,81 @@ pub fn read_sequences_from_file(path: &Path) -> Result<Vec<SequenceRecord>> {
         read_plain_file(path)?
     };
 
-    // Parse FASTA using the selected parser
-    parse_fasta(&contents, path)
+    match format {
+        InputFormat::Fasta => parse_fasta(&contents, path),
+        InputFormat::Genbank => parse_genbank(&contents, path),
+    }
+}
+
+// ============================================================================
+// GenBank Parser
+// ============================================================================
+
+/// Parse GenBank records from raw data (uses slice-based fast path)
+fn parse_genbank(data: &[u8], source: &Path) -> Result<Vec<SequenceRecord>> {
+    use crate::genbank::parse_genbank_slice;
+
+    log::trace!("Using slice-based GenBank parser (fast path)");
+    let gb_records = parse_genbank_slice(data);
+    let mut records = Vec::new();
+    let mut unknown_counter = 0usize;
+
+    for rec in gb_records {
+        if rec.seq.is_empty() {
+            log::warn!(
+                "Skipping record with empty sequence in {}",
+                source.display()
+            );
+            continue;
+        }
+
+        let header = rec
+            .name
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .or(rec.accession.as_deref().filter(|s| !s.is_empty()))
+            .or(rec.definition.as_deref().filter(|s| !s.is_empty()))
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| {
+                unknown_counter += 1;
+                format!("unknown_{}", unknown_counter)
+            });
+
+        if rec.is_circular {
+            log::info!(
+                "Record '{}' in {} has circular topology; use --circular flag for wrap-around products",
+                header,
+                source.display()
+            );
+        }
+
+        let mut sequence = rec.seq;
+        sequence.make_ascii_uppercase();
+
+        records.push(SequenceRecord {
+            header,
+            sequence,
+            source_file: source.to_path_buf(),
+        });
+    }
+
+    log::debug!("Read {} sequences from {}", records.len(), source.display());
+    Ok(records)
 }
 
 // ============================================================================
 // Streaming FASTA Reader (for memory-efficient single-file processing)
 // ============================================================================
 
-/// Create a streaming FASTA reader that yields sequences lazily.
+/// Create a streaming reader that yields sequences lazily from FASTA or GenBank files.
 /// This enables producer-consumer parallelism without loading entire file into memory.
 /// For BGZF-compressed files, uses parallel decompression via gzp.
 #[cfg(feature = "parser_seqio")]
-pub fn streaming_fasta_reader(
+pub fn streaming_reader(
     path: &Path,
 ) -> Result<Box<dyn Iterator<Item = Result<SequenceRecord>> + Send>> {
+    let format = detect_format(path)
+        .ok_or_else(|| anyhow::anyhow!("Unsupported format: {}", path.display()))?;
     let source_file = path.to_path_buf();
 
     if is_gzipped(path) {
@@ -159,7 +267,14 @@ pub fn streaming_fasta_reader(
                 .with_context(|| format!("Failed to open file: {}", path.display()))?;
             let decoder = ParDecompressBuilder::<Bgzf>::new().from_reader(file);
             let buf_reader = BufReader::with_capacity(64 * 1024, decoder);
-            Ok(Box::new(StreamingFastaIter::new(buf_reader, source_file)))
+            match format {
+                InputFormat::Fasta => {
+                    Ok(Box::new(StreamingFastaIter::new(buf_reader, source_file)))
+                }
+                InputFormat::Genbank => {
+                    Ok(Box::new(StreamingGenbankIter::new(buf_reader, source_file)))
+                }
+            }
         } else {
             // Standard gzip: use single-threaded MultiGzDecoder
             log::debug!("Standard gzip format, using single-threaded decompression");
@@ -167,13 +282,25 @@ pub fn streaming_fasta_reader(
                 .with_context(|| format!("Failed to open file: {}", path.display()))?;
             let decoder = MultiGzDecoder::new(file);
             let buf_reader = BufReader::with_capacity(64 * 1024, decoder);
-            Ok(Box::new(StreamingFastaIter::new(buf_reader, source_file)))
+            match format {
+                InputFormat::Fasta => {
+                    Ok(Box::new(StreamingFastaIter::new(buf_reader, source_file)))
+                }
+                InputFormat::Genbank => {
+                    Ok(Box::new(StreamingGenbankIter::new(buf_reader, source_file)))
+                }
+            }
         }
     } else {
         let file =
             File::open(path).with_context(|| format!("Failed to open file: {}", path.display()))?;
         let buf_reader = BufReader::with_capacity(64 * 1024, file);
-        Ok(Box::new(StreamingFastaIter::new(buf_reader, source_file)))
+        match format {
+            InputFormat::Fasta => Ok(Box::new(StreamingFastaIter::new(buf_reader, source_file))),
+            InputFormat::Genbank => {
+                Ok(Box::new(StreamingGenbankIter::new(buf_reader, source_file)))
+            }
+        }
     }
 }
 
@@ -220,19 +347,97 @@ impl<R: Read + Send> Iterator for StreamingFastaIter<R> {
     }
 }
 
-/// Streaming FASTA reader for needletail parser
+// ============================================================================
+// Streaming GenBank Reader
+// ============================================================================
+
+#[cfg(feature = "parser_seqio")]
+struct StreamingGenbankIter<R: Read> {
+    reader: crate::genbank::GenbankReader<BufReader<R>>,
+    source_file: PathBuf,
+    unknown_counter: usize,
+}
+
+#[cfg(feature = "parser_seqio")]
+impl<R: Read> StreamingGenbankIter<R> {
+    fn new(buf_reader: BufReader<R>, source_file: PathBuf) -> Self {
+        Self {
+            reader: crate::genbank::GenbankReader::from_bufreader(buf_reader),
+            source_file,
+            unknown_counter: 0,
+        }
+    }
+}
+
+#[cfg(feature = "parser_seqio")]
+impl<R: Read + Send> Iterator for StreamingGenbankIter<R> {
+    type Item = Result<SequenceRecord>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            match self.reader.next() {
+                Some(Ok(rec)) => {
+                    if rec.seq.is_empty() {
+                        log::warn!(
+                            "Skipping record with empty sequence in {}",
+                            self.source_file.display()
+                        );
+                        continue;
+                    }
+
+                    let header = rec
+                        .name
+                        .as_deref()
+                        .filter(|s| !s.is_empty())
+                        .or(rec.accession.as_deref().filter(|s| !s.is_empty()))
+                        .or(rec.definition.as_deref().filter(|s| !s.is_empty()))
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| {
+                            self.unknown_counter += 1;
+                            format!("unknown_{}", self.unknown_counter)
+                        });
+
+                    if rec.is_circular {
+                        log::info!(
+                            "Record '{}' has circular topology; use --circular flag for wrap-around products",
+                            header
+                        );
+                    }
+
+                    let mut sequence = rec.seq;
+                    sequence.make_ascii_uppercase();
+
+                    return Some(Ok(SequenceRecord {
+                        header,
+                        sequence,
+                        source_file: self.source_file.clone(),
+                    }));
+                }
+                Some(Err(e)) => {
+                    return Some(Err(anyhow::anyhow!("GenBank parse error: {}", e)));
+                }
+                None => return None,
+            }
+        }
+    }
+}
+
+/// Streaming reader for needletail parser (falls back to loading entire file)
 #[cfg(feature = "parser_needletail")]
-pub fn streaming_fasta_reader(
+pub fn streaming_reader(
     path: &Path,
 ) -> Result<Box<dyn Iterator<Item = Result<SequenceRecord>> + Send>> {
-    // For needletail, we fall back to loading the file since it doesn't support
-    // streaming from a generic Read trait as cleanly as seq_io
+    let format = detect_format(path)
+        .ok_or_else(|| anyhow::anyhow!("Unsupported format: {}", path.display()))?;
     let contents = if is_gzipped(path) {
         read_gzipped_file(path)?
     } else {
         read_plain_file(path)?
     };
-    let records = parse_fasta(&contents, path)?;
+    let records = match format {
+        InputFormat::Fasta => parse_fasta(&contents, path)?,
+        InputFormat::Genbank => parse_genbank(&contents, path)?,
+    };
     Ok(Box::new(records.into_iter().map(Ok)))
 }
 
@@ -525,5 +730,223 @@ mod tests {
 
         let files = expand_input_patterns(&patterns).unwrap();
         assert_eq!(files.len(), 1, "Duplicate files should be deduplicated");
+    }
+
+    // ============================================================================
+    // detect_format() tests
+    // ============================================================================
+
+    #[test]
+    fn test_detect_format_fasta_extensions() {
+        for ext in &["fasta", "fa", "fna", "ffn", "faa", "frn", "fas"] {
+            let path = PathBuf::from(format!("test.{}", ext));
+            assert_eq!(
+                detect_format(&path),
+                Some(InputFormat::Fasta),
+                "Expected FASTA for .{}",
+                ext
+            );
+        }
+    }
+
+    #[test]
+    fn test_detect_format_genbank_extensions() {
+        for ext in &["gb", "gbk", "gbff", "genbank", "gbf"] {
+            let path = PathBuf::from(format!("test.{}", ext));
+            assert_eq!(
+                detect_format(&path),
+                Some(InputFormat::Genbank),
+                "Expected GenBank for .{}",
+                ext
+            );
+        }
+    }
+
+    #[test]
+    fn test_detect_format_gz_variants() {
+        assert_eq!(
+            detect_format(Path::new("test.fasta.gz")),
+            Some(InputFormat::Fasta)
+        );
+        assert_eq!(
+            detect_format(Path::new("test.gbk.gz")),
+            Some(InputFormat::Genbank)
+        );
+        assert_eq!(
+            detect_format(Path::new("test.gb.gz")),
+            Some(InputFormat::Genbank)
+        );
+        assert_eq!(
+            detect_format(Path::new("test.fa.gz")),
+            Some(InputFormat::Fasta)
+        );
+    }
+
+    #[test]
+    fn test_detect_format_unknown() {
+        assert_eq!(detect_format(Path::new("test.txt")), None);
+        assert_eq!(detect_format(Path::new("test.csv")), None);
+        assert_eq!(detect_format(Path::new("test.bed")), None);
+        assert_eq!(detect_format(Path::new("test.txt.gz")), None);
+    }
+
+    #[test]
+    fn test_detect_format_case_insensitive() {
+        assert_eq!(
+            detect_format(Path::new("test.FASTA")),
+            Some(InputFormat::Fasta)
+        );
+        assert_eq!(
+            detect_format(Path::new("test.Gbk")),
+            Some(InputFormat::Genbank)
+        );
+    }
+
+    // ============================================================================
+    // expand_input_patterns() filtering tests
+    // ============================================================================
+
+    #[test]
+    fn test_expand_skips_non_sequence_files() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        std::fs::write(temp_dir.path().join("seq.fasta"), b">s\nACGT\n").unwrap();
+        std::fs::write(temp_dir.path().join("notes.txt"), b"notes").unwrap();
+        std::fs::write(temp_dir.path().join("data.csv"), b"a,b,c").unwrap();
+
+        let glob_pattern = format!("{}/*", temp_dir.path().display());
+        let files = expand_input_patterns(&[glob_pattern]).unwrap();
+
+        assert_eq!(files.len(), 1);
+        assert!(files[0].to_string_lossy().contains("seq.fasta"));
+    }
+
+    #[test]
+    fn test_expand_all_unrecognized_errors() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        std::fs::write(temp_dir.path().join("notes.txt"), b"notes").unwrap();
+
+        let glob_pattern = format!("{}/*", temp_dir.path().display());
+        let result = expand_input_patterns(&[glob_pattern]);
+        assert!(result.is_err());
+        assert!(format!("{}", result.unwrap_err()).contains("No supported sequence files found"));
+    }
+
+    // ============================================================================
+    // GenBank parsing tests
+    // ============================================================================
+
+    /// Minimal valid GenBank record for testing
+    fn minimal_genbank(name: &str, seq: &str) -> String {
+        format!(
+            "LOCUS       {:<16} {} bp    DNA     linear   UNK \nDEFINITION  Test sequence.\nACCESSION   ACC001\nFEATURES             Location/Qualifiers\nORIGIN\n        1 {}\n//\n",
+            name,
+            seq.len(),
+            seq.to_lowercase()
+        )
+    }
+
+    #[test]
+    fn test_parse_genbank_single_record() {
+        let gb = minimal_genbank("TestSeq", "acgtacgt");
+        let records = parse_genbank(gb.as_bytes(), Path::new("test.gb")).unwrap();
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].header, "TestSeq");
+        assert_eq!(records[0].sequence, b"ACGTACGT");
+    }
+
+    #[test]
+    fn test_parse_genbank_multi_record() {
+        let gb = format!(
+            "{}{}",
+            minimal_genbank("Seq1", "aaaa"),
+            minimal_genbank("Seq2", "cccc")
+        );
+        let records = parse_genbank(gb.as_bytes(), Path::new("test.gb")).unwrap();
+
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].header, "Seq1");
+        assert_eq!(records[0].sequence, b"AAAA");
+        assert_eq!(records[1].header, "Seq2");
+        assert_eq!(records[1].sequence, b"CCCC");
+    }
+
+    #[test]
+    fn test_parse_genbank_header_fallback_name() {
+        // Name is present — use it
+        let gb = minimal_genbank("MyLocus", "acgt");
+        let records = parse_genbank(gb.as_bytes(), Path::new("test.gb")).unwrap();
+        assert_eq!(records[0].header, "MyLocus");
+    }
+
+    #[test]
+    fn test_parse_genbank_header_fallback_unknown() {
+        // GenBank with empty name field — should fall back through chain
+        let gb = "LOCUS                        4 bp    DNA     linear   UNK \nDEFINITION  .\nACCESSION   \nFEATURES             Location/Qualifiers\nORIGIN\n        1 acgt\n//\n";
+        let records = parse_genbank(gb.as_bytes(), Path::new("test.gb")).unwrap();
+
+        // Should use definition "." or fall back to unknown_1
+        assert!(!records[0].header.is_empty());
+    }
+
+    #[test]
+    fn test_parse_genbank_empty_sequence_skipped() {
+        // Record with no ORIGIN/sequence data
+        let gb = "LOCUS       EmptySeq             0 bp    DNA     linear   UNK \nDEFINITION  Empty.\nACCESSION   E001\nFEATURES             Location/Qualifiers\nORIGIN\n//\n";
+        let records = parse_genbank(gb.as_bytes(), Path::new("test.gb")).unwrap();
+        assert_eq!(records.len(), 0, "Empty sequence records should be skipped");
+    }
+
+    #[test]
+    fn test_parse_genbank_uppercase() {
+        let gb = minimal_genbank("Lower", "acgtnnnn");
+        let records = parse_genbank(gb.as_bytes(), Path::new("test.gb")).unwrap();
+        assert_eq!(records[0].sequence, b"ACGTNNNN");
+    }
+
+    #[test]
+    fn test_read_sequences_from_genbank_file() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let gb = minimal_genbank("FileTest", "acgtacgt");
+        let mut temp = NamedTempFile::with_suffix(".gb").unwrap();
+        temp.write_all(gb.as_bytes()).unwrap();
+        temp.flush().unwrap();
+
+        let records = read_sequences_from_file(temp.path()).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].header, "FileTest");
+        assert_eq!(records[0].sequence, b"ACGTACGT");
+    }
+
+    #[test]
+    fn test_streaming_genbank_reader() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let gb = format!(
+            "{}{}",
+            minimal_genbank("Stream1", "aaaa"),
+            minimal_genbank("Stream2", "tttt")
+        );
+        let mut temp = NamedTempFile::with_suffix(".gb").unwrap();
+        temp.write_all(gb.as_bytes()).unwrap();
+        temp.flush().unwrap();
+
+        let records: Vec<_> = streaming_reader(temp.path())
+            .unwrap()
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
+
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].header, "Stream1");
+        assert_eq!(records[0].sequence, b"AAAA");
+        assert_eq!(records[1].header, "Stream2");
+        assert_eq!(records[1].sequence, b"TTTT");
     }
 }

@@ -7,8 +7,10 @@ use std::path::PathBuf;
 #[command(author, version, about, long_about = None)]
 pub struct Args {
     // ==================== INPUT OPTIONS ====================
-    /// Input FASTA files (comma-separated, glob patterns supported)
-    /// Examples: "file.fasta", "*.fna.gz", "data/*.fasta,other.fa"
+    /// Input sequence files (comma-separated, glob patterns supported)
+    /// Supported formats: FASTA (.fasta, .fa, .fna, .ffn, .fas) and
+    /// GenBank (.gb, .gbk, .gbff, .genbank, .gbf). Gzip (.gz) supported.
+    /// Unrecognized file types in glob results are skipped with a warning.
     #[arg(short, long, required = true, value_delimiter = ',')]
     pub input: Vec<String>,
 

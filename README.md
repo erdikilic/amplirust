@@ -1,11 +1,12 @@
 # Amplirust
 
-A high-performance in-silico PCR tool for primer matching and product extraction from FASTA sequences.
+A high-performance in-silico PCR tool for primer matching and product extraction from FASTA and GenBank sequences.
 
 ## Features
 
 - **Fast approximate primer matching** using SIMD-accelerated algorithms (via [sassy](https://github.com/RagnarGrootKoerkamp/sassy))
 - **IUPAC ambiguity code support** (R, Y, S, W, K, M, B, D, H, V, N) in primers
+- **FASTA and GenBank input** with automatic format detection
 - **Circular genome support** for plasmids and bacterial chromosomes
 - **Reverse complement strand search** for comprehensive primer detection
 - **Multi-threaded processing** for parallel file reading, searching, and compression
@@ -13,6 +14,12 @@ A high-performance in-silico PCR tool for primer matching and product extraction
 - **Flexible primer input** via command line or CSV file
 
 ## Installation
+
+### Conda (recommended)
+
+```bash
+conda install bioconda::amplirust
+```
 
 ### From Source
 
@@ -78,6 +85,12 @@ amplirust -i genome.fasta -p primers.csv --search-rc -o products.fasta --tsv sta
 
 # Gzip compressed output
 amplirust -i genome.fasta.gz -p primers.csv -o products.fasta.gz
+
+# GenBank input
+amplirust -i sequence.gbk -p "16S:AGAGTTTGATCMTGGCTCAG:TACGGYTACCTTGTTACGACTT" -o products.fasta
+
+# Mixed formats via glob (FASTA and GenBank files auto-detected)
+amplirust -i "data/*" -p primers.csv -o products.fasta
 ```
 
 ### Options
@@ -86,7 +99,7 @@ amplirust -i genome.fasta.gz -p primers.csv -o products.fasta.gz
 
 | Option | Description |
 |--------|-------------|
-| `-i, --input <FILES>` | Input FASTA files (comma-separated, glob patterns supported) |
+| `-i, --input <FILES>` | Input sequence files (comma-separated, glob patterns supported). Supports FASTA (`.fasta`, `.fa`, `.fna`, `.ffn`, `.fas`) and GenBank (`.gb`, `.gbk`, `.gbff`, `.genbank`, `.gbf`), including gzip-compressed (`.gz`). Unrecognized file types in glob results are skipped with a warning. |
 | `-p, --primers <PRIMERS>` | Primers as `name:forward:reverse` or path to CSV file |
 | `--circular` | Treat sequences as circular genomes |
 
@@ -186,7 +199,7 @@ TGCATGCATGCA...
 ```
 
 Header format: `{reference_id}:{primer_name}[_rc][_wrap]:{case_number}\tpos={start}-{end}\tstrand={+|-}\tlen={length}`
-- `reference_id` is the first whitespace-delimited token of the original FASTA header
+- `reference_id` is the first whitespace-delimited token of the FASTA header, or the LOCUS name for GenBank records (with fallback to accession, definition, or `unknown_N`)
 - `_rc` suffix indicates product from reverse complement strand
 - `_wrap` suffix indicates product wraps around circular genome
 - `case_number` increments per reference header (resets for each reference)
