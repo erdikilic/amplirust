@@ -1,5 +1,9 @@
 # Amplirust
 
+[![Conda Version](https://anaconda.org/bioconda/amplirust/badges/version.svg)](https://anaconda.org/bioconda/amplirust)
+[![Conda Downloads](https://anaconda.org/bioconda/amplirust/badges/downloads.svg)](https://anaconda.org/bioconda/amplirust)
+[![Conda Platforms](https://anaconda.org/bioconda/amplirust/badges/platforms.svg)](https://anaconda.org/bioconda/amplirust)
+
 A high-performance in-silico PCR tool for primer matching and product extraction from FASTA and GenBank sequences.
 
 ## Features
