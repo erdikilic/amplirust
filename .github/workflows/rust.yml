@@ -9,6 +9,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_BUILD_RUSTFLAGS: ""
   PROJECT_NAME: amplirust
 
 # WRITING PERMISSION IS REQUIRED FOR RELEASES
@@ -26,6 +27,15 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             suffix: ""
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            suffix: ""
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            suffix: ""
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            suffix: ""
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             suffix: ".exe"
@@ -39,27 +49,43 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    - name: Install musl toolchain
+      if: endsWith(matrix.target, '-musl')
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y musl-tools cmake
+
+    - name: Add Rust target
+      run: rustup target add ${{ matrix.target }}
+
+    - name: Get version
+      id: version
+      shell: bash
+      run: |
+        VERSION="${GITHUB_REF_NAME}"
+        echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
     - name: Build
-      run: cargo build --release --verbose
+      run: cargo build --release --target ${{ matrix.target }} --verbose
 
     - name: Run tests
-      run: cargo test --release --verbose
+      run: cargo test --release --target ${{ matrix.target }} --verbose
 
     - name: Rename Binary
       shell: bash
       run: |
-        mv target/release/${{ env.PROJECT_NAME }}${{ matrix.suffix }} target/release/${{ env.PROJECT_NAME }}-${{ matrix.target }}${{ matrix.suffix }}
+        mv target/${{ matrix.target }}/release/${{ env.PROJECT_NAME }}${{ matrix.suffix }} target/${{ matrix.target }}/release/${{ env.PROJECT_NAME }}-${{ steps.version.outputs.version }}-${{ matrix.target }}${{ matrix.suffix }}
 
     # 1. Upload as Artifact (Optional, useful for debugging build failures)
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ env.PROJECT_NAME }}-${{ matrix.target }}
-        path: target/release/${{ env.PROJECT_NAME }}-${{ matrix.target }}${{ matrix.suffix }}
+        name: ${{ env.PROJECT_NAME }}-${{ steps.version.outputs.version }}-${{ matrix.target }}
+        path: target/${{ matrix.target }}/release/${{ env.PROJECT_NAME }}-${{ steps.version.outputs.version }}-${{ matrix.target }}${{ matrix.suffix }}
 
     # 2. Upload to Release (Only runs on tags)
     - name: Release
       uses: softprops/action-gh-release@v1
       if: github.event_name == 'release'
       with:
-        files: target/release/${{ env.PROJECT_NAME }}-${{ matrix.target }}${{ matrix.suffix }}
+        files: target/${{ matrix.target }}/release/${{ env.PROJECT_NAME }}-${{ steps.version.outputs.version }}-${{ matrix.target }}${{ matrix.suffix }}
