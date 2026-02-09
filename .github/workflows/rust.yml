@@ -2,11 +2,8 @@ name: Build & Release
 
 on:
   push:
-    branches: [ "main" ]
     tags:
       - "*.*.*" # Trigger on SemVer-like tags such as 0.1.0
-  pull_request:
-    branches: [ "main" ]
   release:
     types: [published]
 
