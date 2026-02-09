@@ -1,0 +1,26 @@
+{% extends "main.html" %}
+
+{% block tabs %}
+  {{ super() }}
+
+  <section class="mdx-container">
+    <div class="md-grid md-typeset">
+      <div class="mdx-hero">
+        <div class="mdx-hero__content">
+          <h1>Amplirust</h1>
+          <p>A high-performance in-silico PCR tool for primer matching and product extraction from FASTA and GenBank sequences.</p>
+          <a href="getting-started/installation/" class="md-button md-button--primary">
+            Get Started
+          </a>
+          <a href="user-guide/usage/" class="md-button">
+            User Guide
+          </a>
+        </div>
+      </div>
+    </div>
+  </section>
+{% endblock %}
+
+{% block content %}
+  {{ super() }}
+{% endblock %}

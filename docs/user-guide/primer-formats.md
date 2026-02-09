@@ -33,16 +33,19 @@ Then reference the file:
 -p primers.csv
 ```
 
+!!! tip "Which format to use?"
+    Use inline primers for quick one-off searches. Use a CSV file when you have multiple primer pairs or want to reuse primers across runs.
+
 ## IUPAC Ambiguity Codes
 
-Primer sequences support standard IUPAC ambiguity codes:
+Primer sequences support standard IUPAC ambiguity codes. These codes are expanded during matching, allowing a single primer to match multiple sequence variants.
 
 | Code | Bases | Meaning |
 |------|-------|---------|
 | R | A, G | Purine |
 | Y | C, T | Pyrimidine |
-| S | G, C | Strong |
-| W | A, T | Weak |
+| S | G, C | Strong (3 H-bonds) |
+| W | A, T | Weak (2 H-bonds) |
 | K | G, T | Keto |
 | M | A, C | Amino |
 | B | C, G, T | Not A |
@@ -51,4 +54,16 @@ Primer sequences support standard IUPAC ambiguity codes:
 | V | A, C, G | Not T |
 | N | A, C, G, T | Any |
 
-These codes are expanded during matching, allowing a single primer to match multiple sequence variants.
+### IUPAC Complement Pairs
+
+When computing reverse complements, IUPAC codes follow these complement rules:
+
+| Code | Complement | Reason |
+|------|-----------|--------|
+| R (A,G) | Y (C,T) | Purine ↔ Pyrimidine |
+| S (G,C) | S (G,C) | Self-complementary |
+| W (A,T) | W (A,T) | Self-complementary |
+| K (G,T) | M (A,C) | Keto ↔ Amino |
+| B (C,G,T) | V (A,C,G) | Not A ↔ Not T |
+| D (A,G,T) | H (A,C,T) | Not C ↔ Not G |
+| N | N | Any ↔ Any |

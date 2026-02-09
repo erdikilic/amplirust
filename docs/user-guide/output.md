@@ -1,4 +1,4 @@
-# Output
+# Output Formats
 
 Amplirust produces two output formats: FASTA sequences and an optional TSV statistics file.
 
@@ -54,3 +54,37 @@ The optional TSV output (`--tsv`) contains detailed information for each product
 | strand | `+` (forward) or `-` (reverse complement) |
 | is_circular_wrap | `true` if product wraps around |
 | product_seq | The extracted sequence |
+
+## Worked Example
+
+Given a genome with a 16S rRNA region and primers with 1 mismatch each:
+
+```bash
+amplirust -i genome.fasta \
+  -p "16S:AGAGTTTGATCMTGGCTCAG:TACGGYTACCTTGTTACGACTT" \
+  -k 2 -o products.fasta --tsv stats.tsv
+```
+
+**FASTA output:**
+
+```
+>genome_1:16S:1	pos=1024-2548	strand=+	len=1525
+AGAGTTTGATCATGGCTCAG...AAGTCGTAACAAGGTAGCCGTA
+```
+
+**TSV row (selected columns):**
+
+| Column | Value |
+|--------|-------|
+| amplicon_id | genome_1:16S:1 |
+| primer_name | 16S |
+| product_len | 1525 |
+| fwd_start | 1024 |
+| fwd_end | 1044 |
+| fwd_mismatches | 0 |
+| fwd_identity | 1.000 |
+| rev_start | 2526 |
+| rev_end | 2548 |
+| rev_mismatches | 0 |
+| rev_identity | 1.000 |
+| strand | + |

@@ -19,27 +19,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install mdbook
-        run: |
-          MDBOOK_VERSION="0.4.44"
-          curl -sSL "https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz" | tar -xz
-          sudo mv mdbook /usr/local/bin/
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
 
-      - name: Build mdbook
-        run: mdbook build docs/
+      - name: Install MkDocs Material
+        run: pip install mkdocs-material
+
+      - name: Build MkDocs site
+        run: mkdocs build --strict
 
       - name: Build cargo doc
         run: cargo doc --no-deps
         env:
           RUSTDOCFLAGS: "--default-theme ayu"
 
-      - name: Copy API docs into book
-        run: cp -r target/doc docs/book/api
+      - name: Copy API docs into site
+        run: cp -r target/doc site/api
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: docs/book
+          path: site
 
   deploy:
     needs: build

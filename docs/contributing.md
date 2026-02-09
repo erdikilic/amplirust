@@ -1,0 +1,55 @@
+# Contributing
+
+Contributions to Amplirust are welcome!
+
+## Development Setup
+
+```bash
+# Clone the repository
+git clone https://github.com/erdikilic/amplirust.git
+cd amplirust
+
+# Build
+RUSTFLAGS="-C target-cpu=native" cargo build --release
+
+# Run tests
+cargo test
+```
+
+## Code Quality
+
+Before submitting changes, ensure your code passes formatting and linting checks:
+
+```bash
+# Format code
+cargo fmt
+
+# Run linter
+cargo clippy
+```
+
+## Feature Flags
+
+Amplirust uses feature flags for FASTA parser selection:
+
+- `parser_seqio` (default) -- uses the [seq_io](https://github.com/markschl/seq_io) parser
+- `parser_needletail` -- uses the [needletail](https://github.com/onecodex/needletail) parser
+
+Test with both parsers when making changes to input handling:
+
+```bash
+cargo test
+cargo test --no-default-features --features parser_needletail
+```
+
+## Submitting Changes
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/my-change`)
+3. Make your changes and add tests
+4. Ensure `cargo fmt`, `cargo clippy`, and `cargo test` pass
+5. Open a pull request against `main`
+
+## License
+
+Amplirust is licensed under the [MIT License](https://github.com/erdikilic/amplirust/blob/main/LICENSE).
