@@ -34,6 +34,17 @@ needletail = { version = "0.6", optional = true }
 [dev-dependencies]
 tempfile = "3.15"
 
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+
+# Domain-appropriate allows for bioinformatics CLI tool
+similar_names          = "allow"  # fwd/rev, seq/ref are meaningful distinct names
+cast_precision_loss    = "allow"  # usize->f64 for progress bars and statistics
+too_many_lines         = "allow"  # Complex PCR matching/extraction pipelines
+struct_excessive_bools = "allow"  # Match configuration structs
+cast_sign_loss         = "allow"  # Controlled integer conversions in sequence handling
+cast_possible_truncation = "allow"  # u64->usize on known 64-bit platforms
+
 [profile.release]
 lto = true
 codegen-units = 1
