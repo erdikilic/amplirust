@@ -5,6 +5,7 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
+use crate::errors::ValidationError;
 use crate::pcr::PcrProduct;
 
 /// Line width for FASTA sequence wrapping
@@ -142,6 +143,43 @@ pub fn write_fasta_stdout(products: &[PcrProduct]) -> Result<()> {
 
     writer.flush()?;
     Ok(())
+}
+
+/// Validate that an output path is writable before starting expensive processing.
+///
+/// Checks:
+/// 1. Parent directory exists (returns `ValidationError::OutputDirMissing` if not).
+/// 2. File can be created at the path (returns `ValidationError::OutputNotWritable` on failure).
+///    A probe file is created and immediately removed.
+///
+/// # Errors
+///
+/// Returns a `ValidationError` if the output path is not writable.
+pub fn validate_output_writable(path: &Path) -> Result<()> {
+    // Check parent directory exists
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+        && !parent.exists()
+    {
+        return Err(ValidationError::OutputDirMissing {
+            path: parent.to_path_buf(),
+        }
+        .into());
+    }
+
+    // Probe: try creating the file, then immediately remove it
+    match File::create(path) {
+        Ok(_) => {
+            // Clean up the probe file
+            let _ = std::fs::remove_file(path);
+            Ok(())
+        }
+        Err(e) => Err(ValidationError::OutputNotWritable {
+            path: path.to_path_buf(),
+            source: e,
+        }
+        .into()),
+    }
 }
 
 /// TSV output columns
@@ -535,6 +573,27 @@ mod tests {
             cols.len() > 19,
             "Tab in header breaks TSV format (creates extra columns)"
         );
+    }
+
+    #[test]
+    fn test_validate_output_nonexistent_dir() {
+        let result = validate_output_writable(Path::new("/nonexistent/dir/output.fasta"));
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("does not exist"),
+            "Expected 'does not exist' in error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_validate_output_writable_ok() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("test_output.fasta");
+        let result = validate_output_writable(&path);
+        assert!(result.is_ok());
+        // Probe file should have been cleaned up
+        assert!(!path.exists());
     }
 
     #[test]

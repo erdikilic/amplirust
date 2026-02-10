@@ -11,9 +11,9 @@ use std::sync::mpsc::sync_channel;
 use amplirust::cli::Args;
 use amplirust::input::{expand_input_patterns, read_sequences_from_file, streaming_reader};
 use amplirust::matcher::MatchConfig;
-use amplirust::output::{FastaWriter, RunSummary, TsvWriter, write_fasta_record};
+use amplirust::output::{FastaWriter, RunSummary, TsvWriter, validate_output_writable, write_fasta_record};
 use amplirust::pcr::{PcrConfig, canonical_sequence, find_pcr_products};
-use amplirust::primer::parse_primers;
+use amplirust::primer::{parse_primers, warn_primer_length};
 
 fn main() -> Result<()> {
     // Parse command line arguments
@@ -114,6 +114,20 @@ fn run(args: &Args) -> Result<()> {
             String::from_utf8_lossy(&primer.reverse),
             primer.reverse_len()
         );
+    }
+
+    // ── Validation gate: fail-fast before expensive processing ──
+    if let Some(ref output_path) = args.output {
+        validate_output_writable(output_path)
+            .context("Output file path validation failed")?;
+    }
+    if let Some(ref tsv_path) = args.tsv {
+        validate_output_writable(tsv_path)
+            .context("TSV output path validation failed")?;
+    }
+
+    for primer in &primers {
+        warn_primer_length(primer);
     }
 
     // Expand input file patterns

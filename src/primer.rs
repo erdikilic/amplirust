@@ -1,6 +1,8 @@
 use anyhow::{Context, Result, bail};
 use std::path::Path;
 
+use crate::errors::ValidationError;
+
 /// Represents a primer pair for PCR
 #[derive(Debug, Clone)]
 pub struct PrimerPair {
@@ -48,6 +50,33 @@ impl PrimerPair {
     #[must_use]
     pub fn reverse_len(&self) -> usize {
         self.reverse.len()
+    }
+}
+
+/// Minimum recommended primer length (bp). Primers shorter than this are
+/// unusually short for typical PCR and may produce non-specific amplification.
+const MIN_PRIMER_LEN: usize = 10;
+
+/// Maximum recommended primer length (bp). Primers longer than this are
+/// uncommon and may indicate a data entry error.
+const MAX_PRIMER_LEN: usize = 50;
+
+/// Emit `log::warn!` for each primer arm whose length falls outside the
+/// recommended range (`MIN_PRIMER_LEN..=MAX_PRIMER_LEN`). This is advisory
+/// only -- bioinformatics convention: unusual inputs should not block execution.
+pub fn warn_primer_length(primer: &PrimerPair) {
+    for (direction, len) in [("forward", primer.forward_len()), ("reverse", primer.reverse_len())]
+    {
+        if !(MIN_PRIMER_LEN..=MAX_PRIMER_LEN).contains(&len) {
+            log::warn!(
+                "Primer '{}' {} arm has unusual length ({} bp); recommended range is {}-{} bp",
+                primer.name,
+                direction,
+                len,
+                MIN_PRIMER_LEN,
+                MAX_PRIMER_LEN,
+            );
+        }
     }
 }
 
@@ -99,17 +128,44 @@ fn parse_primers_from_csv(path: &Path) -> Result<Vec<PrimerPair>> {
         .from_path(path)
         .with_context(|| format!("Failed to open primer CSV file: {}", path.display()))?;
 
+    // Validate CSV headers before iterating records
+    let headers = reader
+        .headers()
+        .with_context(|| {
+            format!(
+                "Failed to read CSV headers from '{}'; expected format: name,forward,reverse",
+                path.display()
+            )
+        })?
+        .clone();
+
+    if headers.len() < 3 {
+        return Err(ValidationError::CsvFormat {
+            path: path.to_path_buf(),
+            detail: format!(
+                "header has {} column(s), expected at least 3 (name, forward, reverse). Got: {}",
+                headers.len(),
+                headers.iter().collect::<Vec<_>>().join(","),
+            ),
+        }
+        .into());
+    }
+
     let mut primers = Vec::new();
 
     for (i, result) in reader.records().enumerate() {
         let record = result.with_context(|| format!("Error reading CSV row {}", i + 2))?;
 
         if record.len() < 3 {
-            bail!(
-                "CSV row {} has {} columns, expected at least 3 (name, forward, reverse)",
-                i + 2,
-                record.len()
-            );
+            return Err(ValidationError::CsvFormat {
+                path: path.to_path_buf(),
+                detail: format!(
+                    "row {} has {} column(s), expected at least 3 (name, forward, reverse)",
+                    i + 2,
+                    record.len(),
+                ),
+            }
+            .into());
         }
 
         let name = record.get(0).unwrap_or("").trim();
