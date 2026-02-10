@@ -417,8 +417,11 @@ fn run(args: &Args) -> Result<()> {
             .map(|file| {
                 let tx = tx.clone();
                 log::debug!("Reading sequences from: {}", file.display());
-                let records = read_sequences_from_file(file)
-                    .with_context(|| format!("Failed to read input file: {}", file.display()))?;
+                let records =
+                    read_sequences_from_file(file, args.max_decompression_size)
+                        .with_context(|| {
+                            format!("Failed to read input file: {}", file.display())
+                        })?;
 
                 let mut products = Vec::new();
                 for record in &records {

@@ -6,6 +6,32 @@
 
 use anyhow::{Context, Result};
 use std::io::{BufRead, BufReader, Read};
+use std::path::PathBuf;
+
+use crate::errors::ValidationError;
+
+/// Maximum allowed line length in bytes. Protects against pathological input
+/// (e.g., a file with no newlines designed to exhaust memory). Normal `GenBank`
+/// lines are under 200 bytes; long DEFINITION or COMMENT lines rarely exceed
+/// a few hundred. This limit is a safety net, not a format enforcer.
+const MAX_LINE_LENGTH: usize = 100_000; // 100 KB
+
+/// Check that a line does not exceed `MAX_LINE_LENGTH`.
+///
+/// Uses `trim_end()` length because `BufRead::read_line` appends the trailing
+/// newline to the buffer, which should not count against the content limit.
+fn check_line_length(line: &str) -> Result<()> {
+    let content_len = line.trim_end().len();
+    if content_len > MAX_LINE_LENGTH {
+        return Err(ValidationError::LineTooLong {
+            path: PathBuf::from("<genbank input>"),
+            len: content_len,
+            limit: MAX_LINE_LENGTH,
+        }
+        .into());
+    }
+    Ok(())
+}
 
 /// A parsed `GenBank` record containing only the fields we need.
 pub struct GenbankRecord {
@@ -71,6 +97,7 @@ impl<B: BufRead> GenbankReader<B> {
                 if n == 0 {
                     return Ok(None); // EOF
                 }
+                check_line_length(&self.line_buf)?;
                 if self.line_buf.starts_with("LOCUS") {
                     break;
                 }
@@ -104,6 +131,7 @@ impl<B: BufRead> GenbankReader<B> {
                 );
                 break;
             }
+            check_line_length(&self.line_buf)?;
 
             let line = self.line_buf.trim_end();
 
@@ -124,6 +152,7 @@ impl<B: BufRead> GenbankReader<B> {
                     if n == 0 {
                         break;
                     }
+                    check_line_length(&self.line_buf)?;
                     if !self.line_buf.starts_with(' ') || is_keyword(&self.line_buf) {
                         // Not a continuation — this line belongs to the next field
                         break;
@@ -253,6 +282,7 @@ fn read_origin_sequence<B: BufRead>(
             );
             return Ok(false); // EOF
         }
+        check_line_length(line_buf)?;
         let trimmed = line_buf.trim();
         if trimmed == "//" {
             return Ok(false);
@@ -995,6 +1025,34 @@ ORIGIN
         assert_eq!(records.len(), 2);
         assert_eq!(records[0].name.as_deref(), Some("R1"));
         assert_eq!(records[1].name.as_deref(), Some("R2"));
+    }
+
+    #[test]
+    fn test_max_line_length_enforced() {
+        // A GenBank "file" with a line exceeding MAX_LINE_LENGTH
+        let long_line = "A".repeat(MAX_LINE_LENGTH + 1);
+        let gb = format!("LOCUS       S1 4 bp DNA linear UNK\n{long_line}\n//\n");
+        let reader = GenbankReader::new(Cursor::new(gb.as_bytes()));
+        let results: Vec<_> = reader.collect();
+        // Should have an error for the long line
+        assert!(
+            results.iter().any(std::result::Result::is_err),
+            "Should reject line exceeding MAX_LINE_LENGTH"
+        );
+    }
+
+    #[test]
+    fn test_max_line_length_ok_at_limit() {
+        // Line exactly at MAX_LINE_LENGTH should be OK
+        let line = "A".repeat(MAX_LINE_LENGTH);
+        let gb = format!("LOCUS       S1 4 bp DNA linear UNK\n{line}\n//\n");
+        let reader = GenbankReader::new(Cursor::new(gb.as_bytes()));
+        let results: Vec<_> = reader.collect();
+        // All should be Ok (no error)
+        assert!(
+            results.iter().all(std::result::Result::is_ok),
+            "Line at exactly MAX_LINE_LENGTH should be accepted"
+        );
     }
 
     // ========================================================================

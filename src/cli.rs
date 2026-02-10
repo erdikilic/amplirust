@@ -24,6 +24,11 @@ pub struct Args {
     #[arg(long, default_value_t = false)]
     pub circular: bool,
 
+    /// Maximum decompressed file size in bytes (0 = unlimited).
+    /// Prevents memory exhaustion from malicious compressed files.
+    #[arg(long, default_value_t = 4_294_967_296)]
+    pub max_decompression_size: u64,
+
     // ==================== MATCHING OPTIONS ====================
     /// Maximum edit distance (mismatches + indels) for primer matching
     #[arg(short = 'k', long, default_value_t = 2)]

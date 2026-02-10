@@ -24,7 +24,7 @@ fn test_load_fasta() {
 
     let mut sequences = Vec::new();
     for file in &files {
-        let mut records = read_sequences_from_file(file).unwrap();
+        let mut records = read_sequences_from_file(file, 0).unwrap();
         sequences.append(&mut records);
     }
     assert_eq!(sequences.len(), 3);

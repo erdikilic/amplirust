@@ -6,6 +6,8 @@ use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 
+use crate::errors::ValidationError;
+
 /// A sequence record from FASTA input
 #[derive(Debug, Clone)]
 pub struct SequenceRecord {
@@ -146,22 +148,44 @@ fn is_bgzf(path: &Path) -> Result<bool> {
     Ok(header[12] == b'B' && header[13] == b'C')
 }
 
-/// Read and decompress a gzip file using flate2's `MultiGzDecoder`
+/// Read and decompress a gzip file using flate2's `MultiGzDecoder`.
+///
 /// `MultiGzDecoder` handles concatenated/multi-member gzip files correctly.
-/// Pre-allocates based on compressed size × estimated compression ratio
+/// Pre-allocates based on compressed size x estimated compression ratio
 /// to avoid repeated reallocation during decompression.
-fn read_gzipped_file(path: &Path) -> Result<Vec<u8>> {
+///
+/// When `max_size > 0`, wraps the decoder with `Read::take(max_size + 1)` and
+/// checks the result: if more than `max_size` bytes were read, the file exceeds
+/// the limit. The `+1` trick distinguishes "exactly at limit" (OK) from "exceeds
+/// limit" (reject).
+fn read_gzipped_file(path: &Path, max_size: u64) -> Result<Vec<u8>> {
     let file =
         File::open(path).with_context(|| format!("Failed to open file: {}", path.display()))?;
     let compressed_size = file.metadata().map(|m| m.len()).unwrap_or(0) as usize;
 
-    let mut decoder = MultiGzDecoder::new(file);
+    let decoder = MultiGzDecoder::new(file);
     // Pre-allocate with estimated decompression ratio of ~4x (typical for genomic data).
     let estimated = compressed_size.saturating_mul(4);
     let mut decompressed = Vec::with_capacity(estimated);
-    decoder
-        .read_to_end(&mut decompressed)
-        .with_context(|| format!("Failed to decompress {}", path.display()))?;
+
+    if max_size > 0 {
+        let mut limited = decoder.take(max_size + 1);
+        limited
+            .read_to_end(&mut decompressed)
+            .with_context(|| format!("Failed to decompress {}", path.display()))?;
+        if decompressed.len() as u64 > max_size {
+            return Err(ValidationError::DecompressionLimitExceeded {
+                path: path.to_path_buf(),
+                limit: max_size,
+            }
+            .into());
+        }
+    } else {
+        let mut decoder = decoder;
+        decoder
+            .read_to_end(&mut decompressed)
+            .with_context(|| format!("Failed to decompress {}", path.display()))?;
+    }
 
     Ok(decompressed)
 }
@@ -184,13 +208,16 @@ fn read_plain_file(path: &Path) -> Result<Vec<u8>> {
 ///
 /// Returns an error if the file format is unsupported, the file cannot be
 /// read, or the contents cannot be parsed.
-pub fn read_sequences_from_file(path: &Path) -> Result<Vec<SequenceRecord>> {
+pub fn read_sequences_from_file(
+    path: &Path,
+    max_decompression_size: u64,
+) -> Result<Vec<SequenceRecord>> {
     let format = detect_format(path)
         .ok_or_else(|| anyhow::anyhow!("Unsupported format: {}", path.display()))?;
 
     // Read file contents (decompress if gzipped)
     let contents = if is_gzipped(path) {
-        read_gzipped_file(path)?
+        read_gzipped_file(path, max_decompression_size)?
     } else {
         read_plain_file(path)?
     };
@@ -267,6 +294,12 @@ fn parse_genbank(data: &[u8], source: &Path) -> Vec<SequenceRecord> {
 ///
 /// This enables producer-consumer parallelism without loading entire file into memory.
 /// For BGZF-compressed files, uses parallel decompression via gzp.
+///
+/// Decompression limit not applied to streaming reader: `seq_io` processes
+/// one record at a time from the decompression stream, so memory usage is
+/// naturally bounded by a single record's size. The limit exists to prevent
+/// `read_to_end()` (used by `read_gzipped_file`) from loading an entire
+/// decompression bomb into memory, which cannot happen in streaming mode.
 ///
 /// # Errors
 ///
@@ -447,11 +480,12 @@ impl<R: Read + Send> Iterator for StreamingGenbankIter<R> {
 #[cfg(feature = "parser_needletail")]
 pub fn streaming_reader(
     path: &Path,
+    max_decompression_size: u64,
 ) -> Result<Box<dyn Iterator<Item = Result<SequenceRecord>> + Send>> {
     let format = detect_format(path)
         .ok_or_else(|| anyhow::anyhow!("Unsupported format: {}", path.display()))?;
     let contents = if is_gzipped(path) {
-        read_gzipped_file(path)?
+        read_gzipped_file(path, max_decompression_size)?
     } else {
         read_plain_file(path)?
     };
@@ -655,7 +689,7 @@ mod tests {
 
     #[test]
     fn test_nonexistent_file_error() {
-        let result = read_sequences_from_file(Path::new("/nonexistent/path/to/file.fasta"));
+        let result = read_sequences_from_file(Path::new("/nonexistent/path/to/file.fasta"), 0);
         assert!(result.is_err(), "Should error on nonexistent file");
 
         let err = result.unwrap_err();
@@ -932,7 +966,7 @@ mod tests {
         temp.write_all(gb.as_bytes()).unwrap();
         temp.flush().unwrap();
 
-        let records = read_sequences_from_file(temp.path()).unwrap();
+        let records = read_sequences_from_file(temp.path(), 0).unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].header, "FileTest");
         assert_eq!(records[0].sequence, b"ACGTACGT");
