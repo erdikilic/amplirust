@@ -7,6 +7,7 @@
 //! - Output in FASTA format with optional TSV statistics
 
 pub mod cli;
+pub mod errors;
 pub mod genbank;
 pub mod input;
 pub mod matcher;
