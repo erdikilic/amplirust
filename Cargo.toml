@@ -35,6 +35,8 @@ needletail = { version = "0.6", optional = true }
 tempfile = "3.15"
 proptest = "1.10"
 insta = "1.46"
+criterion = "0.8"
+rand = "0.10"
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
@@ -46,6 +48,22 @@ too_many_lines         = "allow"  # Complex PCR matching/extraction pipelines
 struct_excessive_bools = "allow"  # Match configuration structs
 cast_sign_loss         = "allow"  # Controlled integer conversions in sequence handling
 cast_possible_truncation = "allow"  # u64->usize on known 64-bit platforms
+
+[[bench]]
+name = "matching"
+harness = false
+
+[[bench]]
+name = "parsing"
+harness = false
+
+[[bench]]
+name = "pipeline"
+harness = false
+
+[[bench]]
+name = "circular"
+harness = false
 
 [profile.release]
 lto = true

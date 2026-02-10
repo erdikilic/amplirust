@@ -1,2 +1,4 @@
-[build]
-rustflags = ["-C", "target-cpu=native"]
+# target-cpu=native removed for benchmark reproducibility (PERF-01).
+# Per-profile rustflags are NOT stabilized in Cargo (nightly-only).
+# For local optimized builds, use the environment variable:
+#   RUSTFLAGS="-C target-cpu=native" cargo build --release
