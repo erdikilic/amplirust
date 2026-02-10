@@ -13,6 +13,7 @@ pub mod input;
 pub mod matcher;
 pub mod output;
 pub mod pcr;
+pub mod pipeline;
 pub mod primer;
 pub mod utils;
 
