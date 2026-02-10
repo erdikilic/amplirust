@@ -16,8 +16,24 @@ use crate::output::{FastaWriter, RunSummary, TsvWriter, validate_output_writable
 use crate::pcr::{PcrConfig, canonical_sequence, find_pcr_products};
 use crate::primer::{parse_primers, warn_primer_length};
 
-/// Maximum number of sequences buffered between reader and worker threads.
-const SEQUENCE_BUFFER_SIZE: usize = 200;
+/// Minimum streaming buffer size (sequences in flight).
+const MIN_BUFFER_SIZE: usize = 32;
+/// Maximum streaming buffer size to cap memory usage.
+const MAX_BUFFER_SIZE: usize = 1024;
+
+/// Compute the bounded channel capacity for the streaming pipeline.
+///
+/// Adapts to the number of worker threads and (optionally) the input file
+/// size to balance memory usage against worker starvation.
+fn compute_buffer_size(threads: usize, file_size_hint: Option<u64>) -> usize {
+    let base = threads.saturating_mul(4).max(MIN_BUFFER_SIZE);
+    let scaled = match file_size_hint {
+        Some(size) if size < 1_000_000 => base,
+        Some(size) if size < 100_000_000 => base.max(128),
+        _ => base.max(256),
+    };
+    scaled.min(MAX_BUFFER_SIZE)
+}
 
 #[derive(Debug)]
 pub(crate) struct WorkerBatch {
@@ -274,10 +290,15 @@ pub fn run(args: &Args) -> Result<()> {
 
         let file = &input_files[0];
 
-        // Bounded channel from reader to workers (~200 sequences max in flight)
+        // Adapt buffer size to thread count and input file size
+        let file_size_hint = std::fs::metadata(file).ok().map(|m| m.len());
+        let buffer_size = compute_buffer_size(threads, file_size_hint);
+        log::debug!("Streaming buffer size: {buffer_size} sequences");
+
+        // Bounded channel from reader to workers (adaptive capacity)
         // This provides backpressure when workers are slow
         let (seq_tx, seq_rx) =
-            crossbeam_channel::bounded::<crate::input::SequenceRecord>(SEQUENCE_BUFFER_SIZE);
+            crossbeam_channel::bounded::<crate::input::SequenceRecord>(buffer_size);
 
         // Progress bar (spinner mode - total unknown until file fully read)
         let processed_count = Arc::new(AtomicUsize::new(0));
@@ -474,4 +495,53 @@ pub fn run(args: &Args) -> Result<()> {
 
     log::info!("Done!");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_buffer_size_small_file_few_threads() {
+        // threads=2, size=500_000 (small, <1M) => base = max(2*4, 32) = 32, scaled = 32
+        let result = compute_buffer_size(2, Some(500_000));
+        assert!(result >= MIN_BUFFER_SIZE);
+        assert!(result <= MAX_BUFFER_SIZE);
+        assert_eq!(result, 32);
+    }
+
+    #[test]
+    fn test_buffer_size_large_file_many_threads() {
+        // threads=16, size=500_000_000 (>=100M) => base = max(16*4, 32) = 64, scaled = max(64, 256) = 256
+        let result = compute_buffer_size(16, Some(500_000_000));
+        assert_eq!(result, 256);
+    }
+
+    #[test]
+    fn test_buffer_size_no_hint() {
+        // threads=4, size=None (unknown defaults to large) => base = max(4*4, 32) = 32, scaled = max(32, 256) = 256
+        let result = compute_buffer_size(4, None);
+        assert!(result >= 256);
+    }
+
+    #[test]
+    fn test_buffer_size_capped_at_max() {
+        // threads=512, size=1B (>=100M) => base = max(512*4, 32) = 2048, scaled = max(2048, 256) = 2048, capped = 1024
+        let result = compute_buffer_size(512, Some(1_000_000_000));
+        assert_eq!(result, MAX_BUFFER_SIZE);
+    }
+
+    #[test]
+    fn test_buffer_size_never_below_min() {
+        // threads=1, size=100 (tiny, <1M) => base = max(1*4, 32) = 32
+        let result = compute_buffer_size(1, Some(100));
+        assert_eq!(result, MIN_BUFFER_SIZE);
+    }
+
+    #[test]
+    fn test_buffer_size_medium_file() {
+        // threads=8, size=50_000_000 (1M..100M) => base = max(8*4, 32) = 32, scaled = max(32, 128) = 128
+        let result = compute_buffer_size(8, Some(50_000_000));
+        assert!(result >= 128);
+    }
 }
