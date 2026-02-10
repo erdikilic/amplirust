@@ -1,5 +1,12 @@
 use anyhow::{Context, Result};
+use indicatif::{ProgressBar, ProgressStyle};
 use log::LevelFilter;
+use rayon::prelude::*;
+use std::collections::{HashMap, HashSet};
+use std::io::Write;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::sync_channel;
 
 use amplirust::cli::Args;
 use amplirust::input::{expand_input_patterns, read_sequences_from_file, streaming_reader};
@@ -7,8 +14,6 @@ use amplirust::matcher::MatchConfig;
 use amplirust::output::{FastaWriter, RunSummary, TsvWriter, write_fasta_record};
 use amplirust::pcr::{PcrConfig, canonical_sequence, find_pcr_products};
 use amplirust::primer::parse_primers;
-use std::io::Write;
-use std::sync::Arc;
 
 fn main() -> Result<()> {
     // Parse command line arguments
@@ -18,7 +23,7 @@ fn main() -> Result<()> {
     init_logging(args.verbose);
 
     // Run the main application
-    run(args)
+    run(&args)
 }
 
 fn init_logging(verbosity: u8) {
@@ -36,7 +41,23 @@ fn init_logging(verbosity: u8) {
         .init();
 }
 
-fn run(args: Args) -> Result<()> {
+/// Maximum number of sequences buffered between reader and worker threads.
+const SEQUENCE_BUFFER_SIZE: usize = 200;
+
+#[derive(Debug)]
+struct WorkerBatch {
+    products: Vec<amplirust::pcr::PcrProduct>,
+    sequences: usize,
+}
+
+#[derive(Debug)]
+struct RunOutcome {
+    summary: RunSummary,
+    wrote_fasta: bool,
+    wrote_tsv: bool,
+}
+
+fn run(args: &Args) -> Result<()> {
     let show_progress = args.show_progress();
 
     log::info!("Amplirust v{}", env!("CARGO_PKG_VERSION"));
@@ -130,24 +151,6 @@ fn run(args: Args) -> Result<()> {
     log::debug!("  Max N fraction: {:.2}", args.max_n_fraction);
 
     // Process files in parallel and stream products to a single writer
-    use indicatif::{ProgressBar, ProgressStyle};
-    use rayon::prelude::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::mpsc::sync_channel;
-
-    #[derive(Debug)]
-    struct WorkerBatch {
-        products: Vec<amplirust::pcr::PcrProduct>,
-        sequences: usize,
-    }
-
-    #[derive(Debug)]
-    struct RunOutcome {
-        summary: RunSummary,
-        wrote_fasta: bool,
-        wrote_tsv: bool,
-    }
-
     let pb = if show_progress && input_files.len() > 1 {
         let pb = ProgressBar::new(input_files.len() as u64);
         pb.set_style(
@@ -174,7 +177,6 @@ fn run(args: Args) -> Result<()> {
     let consumer_threads = threads;
 
     let consumer_handle = std::thread::spawn(move || -> Result<RunOutcome> {
-        use std::collections::{HashMap, HashSet};
         let mut fasta_writer: Option<FastaWriter> = None;
         let mut tsv_writer: Option<TsvWriter> = None;
         let mut stdout_writer = if output_path.is_none() {
@@ -278,7 +280,6 @@ fn run(args: Args) -> Result<()> {
 
         // Bounded channel from reader to workers (~200 sequences max in flight)
         // This provides backpressure when workers are slow
-        const SEQUENCE_BUFFER_SIZE: usize = 200;
         let (seq_tx, seq_rx) =
             crossbeam_channel::bounded::<amplirust::input::SequenceRecord>(SEQUENCE_BUFFER_SIZE);
 

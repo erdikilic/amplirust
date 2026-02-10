@@ -48,7 +48,7 @@ const COMPLEMENT_TABLE: [u8; 128] = {
 
 /// Get the complement of a single nucleotide
 #[inline]
-#[must_use] 
+#[must_use]
 pub fn complement(base: u8) -> u8 {
     if base < 128 {
         COMPLEMENT_TABLE[base as usize]
@@ -58,7 +58,7 @@ pub fn complement(base: u8) -> u8 {
 }
 
 /// Compute the reverse complement of a DNA sequence
-#[must_use] 
+#[must_use]
 pub fn reverse_complement(seq: &[u8]) -> Vec<u8> {
     seq.iter().rev().map(|&b| complement(b)).collect()
 }
@@ -74,7 +74,7 @@ pub fn reverse_complement_into(seq: &[u8], output: &mut Vec<u8>) {
 
 /// Calculate percentage identity from edit distance and alignment length
 /// Returns value between 0.0 and 1.0
-#[must_use] 
+#[must_use]
 pub fn calculate_identity(edit_distance: usize, alignment_len: usize) -> f64 {
     if alignment_len == 0 {
         return 0.0;
@@ -85,7 +85,7 @@ pub fn calculate_identity(edit_distance: usize, alignment_len: usize) -> f64 {
 
 /// Extend a sequence for circular genome searching
 /// Appends the beginning of the sequence to allow wrap-around matches
-#[must_use] 
+#[must_use]
 pub fn make_circular_searchable(seq: &[u8], max_product_len: usize) -> Vec<u8> {
     if seq.is_empty() {
         return Vec::new();
@@ -102,13 +102,13 @@ pub fn make_circular_searchable(seq: &[u8], max_product_len: usize) -> Vec<u8> {
 }
 
 /// Check if a position in an extended circular sequence wraps around
-#[must_use] 
+#[must_use]
 pub fn is_circular_wrap(pos: usize, original_len: usize) -> bool {
     pos >= original_len
 }
 
 /// Convert a position from extended circular sequence back to original coordinates
-#[must_use] 
+#[must_use]
 pub fn circular_to_original_pos(pos: usize, original_len: usize) -> usize {
     pos % original_len
 }

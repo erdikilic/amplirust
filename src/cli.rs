@@ -82,13 +82,13 @@ pub struct Args {
 
 impl Args {
     /// Parse command line arguments
-    #[must_use] 
+    #[must_use]
     pub fn parse_args() -> Self {
         Args::parse()
     }
 
     /// Get the effective number of threads
-    #[must_use] 
+    #[must_use]
     pub fn effective_threads(&self) -> usize {
         if self.threads == 0 {
             num_cpus::get()
@@ -98,7 +98,7 @@ impl Args {
     }
 
     /// Check if output should be gzip compressed
-    #[must_use] 
+    #[must_use]
     pub fn output_is_gzipped(&self) -> bool {
         self.output
             .as_ref()
@@ -107,7 +107,7 @@ impl Args {
     }
 
     /// Check if progress bar should be shown
-    #[must_use] 
+    #[must_use]
     pub fn show_progress(&self) -> bool {
         !self.quiet && self.verbose == 0
     }

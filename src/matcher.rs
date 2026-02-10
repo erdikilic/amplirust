@@ -41,7 +41,7 @@ pub struct PrimerMatch {
 
 impl PrimerMatch {
     /// Create from a sassy Match, calculating identity
-    #[must_use] 
+    #[must_use]
     pub fn from_sassy_match(m: &Match, primer_len: usize) -> Self {
         let cost = m.cost as usize;
         // Use primer length for identity calculation (standard practice)
@@ -58,7 +58,7 @@ impl PrimerMatch {
     }
 
     /// Length of the matched region in the text
-    #[must_use] 
+    #[must_use]
     pub fn match_len(&self) -> usize {
         self.end - self.start
     }
@@ -74,7 +74,7 @@ pub struct PrimerMatcher {
 
 impl PrimerMatcher {
     /// Create a new primer matcher with the given configuration
-    #[must_use] 
+    #[must_use]
     pub fn new(config: MatchConfig) -> Self {
         let searcher = if config.search_rc {
             Searcher::<Iupac>::new_rc()
@@ -115,14 +115,14 @@ impl PrimerMatcher {
     }
 
     /// Check if search includes reverse complement
-    #[must_use] 
+    #[must_use]
     pub fn searches_rc(&self) -> bool {
         self.config.search_rc
     }
 }
 
 /// Find forward primer matches in a sequence
-#[must_use] 
+#[must_use]
 pub fn find_forward_matches(
     primer: &[u8],
     sequence: &[u8],
@@ -135,7 +135,7 @@ pub fn find_forward_matches(
 /// Find reverse primer matches in a sequence
 /// Note: The reverse primer should be searched on the reverse complement
 /// or using sassy's RC mode which handles this automatically
-#[must_use] 
+#[must_use]
 pub fn find_reverse_matches(
     primer: &[u8],
     sequence: &[u8],

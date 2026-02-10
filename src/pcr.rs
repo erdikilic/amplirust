@@ -68,7 +68,7 @@ pub struct PcrProduct {
 
 impl PcrProduct {
     /// Reference identifier (first whitespace-delimited token of the header)
-    #[must_use] 
+    #[must_use]
     pub fn reference_id(&self) -> &str {
         self.reference_header
             .split_whitespace()
@@ -77,7 +77,7 @@ impl PcrProduct {
     }
 
     /// Generate the output header for this product
-    #[must_use] 
+    #[must_use]
     pub fn header(&self) -> String {
         let strand_suffix = match self.strand {
             Strand::Fwd => "",
@@ -96,20 +96,20 @@ impl PcrProduct {
     }
 
     /// Get the product length
-    #[must_use] 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.sequence.len()
     }
 
     /// Check if product is empty
-    #[must_use] 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.sequence.is_empty()
     }
 }
 
 /// Find all PCR products for a single sequence and primer pair
-#[must_use] 
+#[must_use]
 pub fn find_pcr_products(
     record: &SequenceRecord,
     primer: &PrimerPair,
@@ -389,7 +389,7 @@ fn find_rc_strand_products(
 }
 
 /// Remove duplicate product sequences per reference header
-#[must_use] 
+#[must_use]
 pub fn remove_duplicate_products_by_reference(products: Vec<PcrProduct>) -> Vec<PcrProduct> {
     use std::collections::{HashMap, HashSet};
 
@@ -423,7 +423,7 @@ fn assign_case_numbers_by_reference(products: &mut [PcrProduct]) {
     }
 }
 
-#[must_use] 
+#[must_use]
 pub fn canonical_sequence(sequence: &[u8]) -> Vec<u8> {
     let rc = reverse_complement(sequence);
     if rc.as_slice() < sequence {
@@ -437,7 +437,7 @@ fn n_fraction(sequence: &[u8]) -> f64 {
     if sequence.is_empty() {
         return 0.0;
     }
-    let n_count = sequence.iter().filter(|&&b| b == b'N').count();
+    let n_count = memchr::memchr_iter(b'N', sequence).count();
     n_count as f64 / sequence.len() as f64
 }
 
@@ -956,7 +956,8 @@ mod tests {
         for product in &products {
             // Verify that is_circular_wrap correlates with whether the product
             // actually extends beyond the original sequence length
-            let _would_extend_past = product.full_length + product.fwd_match.start > 24;
+            // Check if the product would extend past the original sequence length
+            // let would_extend_past = product.full_length + product.fwd_match.start > 24;
             // Note: circular wrapping means the product's search found something
             // in the extended region (positions >= original_len)
             if !product.is_circular_wrap {

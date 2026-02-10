@@ -17,6 +17,11 @@ pub enum FastaWriter {
 }
 
 impl FastaWriter {
+    /// Create a new FASTA writer for the given output path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the output file cannot be created.
     pub fn new(output_path: &Path, threads: usize) -> Result<Self> {
         let is_gzipped = output_path
             .extension()
@@ -40,6 +45,11 @@ impl FastaWriter {
         }
     }
 
+    /// Write a single PCR product as a FASTA record.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if writing to the underlying stream fails.
     pub fn write_product(&mut self, product: &PcrProduct) -> Result<()> {
         match self {
             FastaWriter::Plain(writer) => write_fasta_record(writer, product),
@@ -47,6 +57,11 @@ impl FastaWriter {
         }
     }
 
+    /// Flush and finalize the writer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if flushing or finalizing the output stream fails.
     pub fn finish(self) -> Result<()> {
         match self {
             FastaWriter::Plain(mut writer) => {
@@ -63,7 +78,11 @@ impl FastaWriter {
     }
 }
 
-/// Write PCR products to a FASTA file (with optional gzip compression)
+/// Write PCR products to a FASTA file (with optional gzip compression).
+///
+/// # Errors
+///
+/// Returns an error if the output file cannot be created or written to.
 pub fn write_fasta(products: &[PcrProduct], output_path: &Path, threads: usize) -> Result<()> {
     let mut writer = FastaWriter::new(output_path, threads)?;
     for product in products {
@@ -78,7 +97,11 @@ pub fn write_fasta(products: &[PcrProduct], output_path: &Path, threads: usize) 
     Ok(())
 }
 
-/// Write a single FASTA record
+/// Write a single FASTA record.
+///
+/// # Errors
+///
+/// Returns an error if writing to the stream fails.
 pub fn write_fasta_record<W: Write>(writer: &mut W, product: &PcrProduct) -> Result<()> {
     // Write header
     let strand_str = match product.strand {
@@ -104,7 +127,11 @@ pub fn write_fasta_record<W: Write>(writer: &mut W, product: &PcrProduct) -> Res
     Ok(())
 }
 
-/// Write PCR products to stdout as FASTA
+/// Write PCR products to stdout as FASTA.
+///
+/// # Errors
+///
+/// Returns an error if writing to stdout fails.
 pub fn write_fasta_stdout(products: &[PcrProduct]) -> Result<()> {
     let stdout = std::io::stdout();
     let mut writer = BufWriter::new(stdout.lock());
@@ -129,6 +156,11 @@ pub struct TsvWriter {
 }
 
 impl TsvWriter {
+    /// Create a new TSV writer for the given output path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the output file cannot be created.
     pub fn new(output_path: &Path) -> Result<Self> {
         let file = File::create(output_path)
             .with_context(|| format!("Failed to create TSV file: {}", output_path.display()))?;
@@ -137,17 +169,31 @@ impl TsvWriter {
         Ok(Self { writer })
     }
 
+    /// Write a single PCR product as a TSV record.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if writing to the underlying stream fails.
     pub fn write_product(&mut self, product: &PcrProduct) -> Result<()> {
         write_tsv_record(&mut self.writer, product)
     }
 
+    /// Flush and finalize the writer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if flushing the output stream fails.
     pub fn finish(mut self) -> Result<()> {
         self.writer.flush()?;
         Ok(())
     }
 }
 
-/// Write TSV statistics file
+/// Write TSV statistics file.
+///
+/// # Errors
+///
+/// Returns an error if the output file cannot be created or written to.
 pub fn write_tsv(products: &[PcrProduct], output_path: &Path) -> Result<()> {
     let mut writer = TsvWriter::new(output_path)?;
     for product in products {
@@ -206,7 +252,7 @@ pub struct RunSummary {
 
 impl RunSummary {
     /// Create summary from pre-aggregated counts
-    #[must_use] 
+    #[must_use]
     pub fn from_counts(
         total_sequences: usize,
         total_primers: usize,
@@ -230,7 +276,7 @@ impl RunSummary {
     }
 
     /// Create summary from products
-    #[must_use] 
+    #[must_use]
     pub fn from_products(
         products: &[PcrProduct],
         num_sequences: usize,
@@ -404,7 +450,7 @@ mod tests {
         let mut output = Vec::new();
 
         // Write header manually for test
-        writeln!(output, "{}", TSV_HEADER).unwrap();
+        writeln!(output, "{TSV_HEADER}").unwrap();
         write_tsv_record(&mut output, &product).unwrap();
 
         let content = String::from_utf8(output).unwrap();
@@ -496,7 +542,7 @@ mod tests {
         // Sequence > 80bp should wrap correctly
         let mut product = make_test_product(1);
         // Create a sequence longer than 80bp
-        product.sequence = b"ACGT".repeat(25).to_vec(); // 100bp
+        product.sequence = b"ACGT".repeat(25); // 100bp
 
         let mut output = Vec::new();
         write_fasta_record(&mut output, &product).unwrap();

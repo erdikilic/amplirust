@@ -13,7 +13,11 @@ pub struct PrimerPair {
 }
 
 impl PrimerPair {
-    /// Create a new primer pair
+    /// Create a new primer pair.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either primer contains invalid IUPAC characters.
     pub fn new(
         name: impl Into<String>,
         forward: impl AsRef<[u8]>,
@@ -35,13 +39,13 @@ impl PrimerPair {
     }
 
     /// Get forward primer length
-    #[must_use] 
+    #[must_use]
     pub fn forward_len(&self) -> usize {
         self.forward.len()
     }
 
     /// Get reverse primer length
-    #[must_use] 
+    #[must_use]
     pub fn reverse_len(&self) -> usize {
         self.reverse.len()
     }
@@ -67,7 +71,12 @@ fn validate_iupac_sequence(seq: &[u8], primer_name: &str, direction: &str) -> Re
     Ok(())
 }
 
-/// Parse primers from either a CLI argument string or a CSV file
+/// Parse primers from either a CLI argument string or a CSV file.
+///
+/// # Errors
+///
+/// Returns an error if the input cannot be parsed as a valid primer specification
+/// or if the CSV file cannot be read.
 pub fn parse_primers(input: &str) -> Result<Vec<PrimerPair>> {
     let path = Path::new(input);
 

@@ -274,7 +274,7 @@ use memchr::memmem;
 /// `BufReader`/`read_line` overhead. It uses `memchr::memmem` to find record
 /// boundaries (`\nLOCUS`) and jump directly to `\nORIGIN`, skipping FEATURES
 /// entirely.
-#[must_use] 
+#[must_use]
 pub fn parse_genbank_slice(data: &[u8]) -> Vec<GenbankRecord> {
     if data.is_empty() {
         return Vec::new();
@@ -306,19 +306,14 @@ pub fn parse_genbank_slice(data: &[u8]) -> Vec<GenbankRecord> {
             data.len()
         };
         let slice = &data[start..end];
-        if let Some(rec) = parse_single_record_slice(slice, &origin_finder) {
-            records.push(rec);
-        }
+        records.push(parse_single_record_slice(slice, &origin_finder));
     }
 
     records
 }
 
 /// Parse a single `GenBank` record from a byte slice that starts with `LOCUS`.
-fn parse_single_record_slice(
-    data: &[u8],
-    origin_finder: &memmem::FinderRev,
-) -> Option<GenbankRecord> {
+fn parse_single_record_slice(data: &[u8], origin_finder: &memmem::FinderRev) -> GenbankRecord {
     let mut record = GenbankRecord {
         name: None,
         accession: None,
@@ -351,12 +346,11 @@ fn parse_single_record_slice(
             opos + 1 + memchr::memchr(b'\n', &data[opos + 1..]).unwrap_or(data[opos + 1..].len());
         let seq_region = &data[origin_line_end..];
         // Find the record terminator "//" within the sequence region.
-        let term_pos = memmem::find(seq_region, b"\n//")
-            .map_or(seq_region.len(), |p| p + 1);
+        let term_pos = memmem::find(seq_region, b"\n//").map_or(seq_region.len(), |p| p + 1);
         extract_origin_fast(&seq_region[..term_pos], &mut record.seq);
     }
 
-    Some(record)
+    record
 }
 
 /// Find where the header section ends (before FEATURES or ORIGIN).
@@ -933,15 +927,17 @@ ORIGIN
 
     #[test]
     fn test_large_sequence_many_origin_lines() {
+        use std::fmt::Write;
         // Build a GenBank record with 600bp of sequence (10 ORIGIN lines)
         let seq_chunk = "acgtacgtac"; // 10 bases
         let mut gb = String::from("LOCUS       Big 600 bp DNA linear UNK\nORIGIN\n");
         let mut pos = 1;
         for _ in 0..10 {
-            gb.push_str(&format!(
-                "{:>9} {} {} {} {} {} {}\n",
-                pos, seq_chunk, seq_chunk, seq_chunk, seq_chunk, seq_chunk, seq_chunk
-            ));
+            writeln!(
+                gb,
+                "{pos:>9} {seq_chunk} {seq_chunk} {seq_chunk} {seq_chunk} {seq_chunk} {seq_chunk}"
+            )
+            .unwrap();
             pos += 60;
         }
         gb.push_str("//\n");
@@ -950,7 +946,7 @@ ORIGIN
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].seq.len(), 600);
         // All bases should be alphabetic
-        assert!(records[0].seq.iter().all(|b| b.is_ascii_alphabetic()));
+        assert!(records[0].seq.iter().all(u8::is_ascii_alphabetic));
     }
 
     #[test]
