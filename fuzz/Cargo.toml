@@ -1,0 +1,47 @@
+[package]
+name = "amplirust-fuzz"
+version = "0.0.1"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+tempfile = "3"
+seq-io = "0.3"
+
+[dependencies.amplirust]
+path = ".."
+features = ["parser_seqio"]
+
+# Independent workspace -- does not join parent workspace
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "fuzz_genbank_streaming"
+path = "fuzz_targets/fuzz_genbank_streaming.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_genbank_slice"
+path = "fuzz_targets/fuzz_genbank_slice.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_fasta"
+path = "fuzz_targets/fuzz_fasta.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_primer_csv"
+path = "fuzz_targets/fuzz_primer_csv.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_primer_matcher"
+path = "fuzz_targets/fuzz_primer_matcher.rs"
+doc = false

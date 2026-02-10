@@ -1,3 +1,5 @@
 /target
 /site
 .planning/
+fuzz/artifacts/
+fuzz/target/
