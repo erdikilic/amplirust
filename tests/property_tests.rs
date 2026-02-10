@@ -1,13 +1,25 @@
 use proptest::prelude::*;
 
 use amplirust::utils::{
-    calculate_identity, circular_to_original_pos, is_circular_wrap, make_circular_searchable,
+    calculate_identity, circular_to_original_pos, complement, is_circular_wrap,
+    make_circular_searchable, reverse_complement,
 };
 
 /// Strategy to generate random DNA sequences of length in `len_range`.
 fn dna_sequence(len_range: std::ops::Range<usize>) -> impl Strategy<Value = Vec<u8>> {
     proptest::collection::vec(
         proptest::sample::select(vec![b'A', b'C', b'G', b'T']),
+        len_range,
+    )
+}
+
+/// Strategy to generate random IUPAC sequences (all 15 valid ambiguity codes).
+fn iupac_sequence(len_range: std::ops::Range<usize>) -> impl Strategy<Value = Vec<u8>> {
+    proptest::collection::vec(
+        proptest::sample::select(vec![
+            b'A', b'C', b'G', b'T', b'R', b'Y', b'S', b'W', b'K', b'M', b'B', b'D', b'H',
+            b'V', b'N',
+        ]),
         len_range,
     )
 }
@@ -77,6 +89,68 @@ proptest! {
             edit_distance,
             alignment_len,
             identity
+        );
+    }
+
+    // ── TEST-09: Reverse complement invariants ───────────────────────────
+
+    /// Applying reverse complement twice to any DNA sequence returns the original.
+    #[test]
+    fn rc_involution_dna(seq in dna_sequence(0..500)) {
+        let len = seq.len();
+        let rc = reverse_complement(&seq);
+        let rc_rc = reverse_complement(&rc);
+        prop_assert_eq!(
+            rc_rc,
+            seq,
+            "RC involution failed for DNA sequence of length {}",
+            len
+        );
+    }
+
+    /// RC involution holds for all 15 valid IUPAC ambiguity codes.
+    #[test]
+    fn rc_involution_iupac(seq in iupac_sequence(0..500)) {
+        let len = seq.len();
+        let rc = reverse_complement(&seq);
+        let rc_rc = reverse_complement(&rc);
+        prop_assert_eq!(
+            rc_rc,
+            seq,
+            "RC involution failed for IUPAC sequence of length {}",
+            len
+        );
+    }
+
+    /// Reverse complement always preserves sequence length.
+    #[test]
+    fn rc_preserves_length(seq in dna_sequence(0..1000)) {
+        let rc = reverse_complement(&seq);
+        prop_assert_eq!(
+            rc.len(),
+            seq.len(),
+            "RC changed length: {} -> {}",
+            seq.len(),
+            rc.len()
+        );
+    }
+
+    /// Single-base complement is its own inverse for all valid IUPAC bases.
+    #[test]
+    fn rc_complement_involution_single_base(
+        base in proptest::sample::select(vec![
+            b'A', b'C', b'G', b'T', b'R', b'Y', b'S', b'W', b'K', b'M',
+            b'B', b'D', b'H', b'V', b'N',
+        ])
+    ) {
+        let result = complement(complement(base));
+        prop_assert_eq!(
+            result,
+            base,
+            "complement(complement({})) = {} (expected {})",
+            base as char,
+            result as char,
+            base as char
         );
     }
 }
