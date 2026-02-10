@@ -55,7 +55,10 @@ impl<R: Read> GenbankReader<BufReader<R>> {
     pub fn new(reader: R) -> Self {
         Self {
             reader: BufReader::new(reader),
-            line_buf: String::new(),
+            // Pre-allocate to typical GenBank ORIGIN line width (~80 chars:
+            // 9-char line number + 6 groups of 10 bases + spaces) to avoid
+            // early reallocations during sequential line reads.
+            line_buf: String::with_capacity(80),
             has_pending_locus: false,
         }
     }
@@ -66,7 +69,8 @@ impl<B: BufRead> GenbankReader<B> {
     pub fn from_bufreader(reader: B) -> Self {
         Self {
             reader,
-            line_buf: String::new(),
+            // Pre-allocate to typical GenBank ORIGIN line width (~80 chars)
+            line_buf: String::with_capacity(80),
             has_pending_locus: false,
         }
     }

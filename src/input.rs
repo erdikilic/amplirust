@@ -164,8 +164,20 @@ fn read_gzipped_file(path: &Path, max_size: u64) -> Result<Vec<u8>> {
     let compressed_size = file.metadata().map(|m| m.len()).unwrap_or(0) as usize;
 
     let decoder = MultiGzDecoder::new(file);
-    // Pre-allocate with estimated decompression ratio of ~4x (typical for genomic data).
-    let estimated = compressed_size.saturating_mul(4);
+    // Adaptive estimation: GenBank metadata compresses differently than raw sequence.
+    // Strip .gz to inspect the inner extension for format-aware ratio selection.
+    let inner_path = path.file_stem().map(std::path::Path::new);
+    let ratio = if inner_path
+        .and_then(|p| p.extension())
+        .is_some_and(|e| {
+            let lower = e.to_ascii_lowercase();
+            matches!(lower.to_str(), Some("gb" | "gbk" | "gbff" | "genbank" | "gbf"))
+        }) {
+        3 // GenBank files: metadata-heavy, lower compression ratio
+    } else {
+        4 // FASTA/other: raw sequence, higher compression ratio
+    };
+    let estimated = compressed_size.saturating_mul(ratio);
     let mut decompressed = Vec::with_capacity(estimated);
 
     if max_size > 0 {
