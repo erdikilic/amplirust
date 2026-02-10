@@ -232,7 +232,7 @@ fn test_output_fasta() {
 
         // Verify file was created and has content
         let content = std::fs::read_to_string(&output_path).unwrap();
-        assert!(content.contains(">"));
+        assert!(content.contains('>'));
         assert!(content.len() > 10);
     }
 }
@@ -420,7 +420,7 @@ fn test_gzip_output_readable() {
 
     // Verify content is valid FASTA
     assert!(
-        content.contains(">"),
+        content.contains('>'),
         "Decompressed content should have FASTA header"
     );
     assert!(

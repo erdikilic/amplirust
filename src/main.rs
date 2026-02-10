@@ -72,7 +72,7 @@ fn run(args: Args) -> Result<()> {
 
     // Configure thread pool
     let threads = args.effective_threads();
-    log::info!("Using {} threads", threads);
+    log::info!("Using {threads} threads");
 
     rayon::ThreadPoolBuilder::new()
         .num_threads(threads)
@@ -359,7 +359,7 @@ fn run(args: Args) -> Result<()> {
 
         let total_sequences = processed_count.load(Ordering::Relaxed);
         if let Some(ref pb) = seq_pb {
-            pb.finish_with_message(format!("{} sequences processed", total_sequences));
+            pb.finish_with_message(format!("{total_sequences} sequences processed"));
         }
 
         // tx already dropped, return empty results (no per-file errors in streaming mode)

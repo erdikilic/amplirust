@@ -46,7 +46,7 @@ pub struct PcrProduct {
     pub source_file: String,
     /// Primer pair name
     pub primer_name: String,
-    /// Product sequence (may be trimmed if trim_primers is set)
+    /// Product sequence (may be trimmed if `trim_primers` is set)
     pub sequence: Vec<u8>,
     /// Full product length (including primers, before trimming)
     pub full_length: usize,
@@ -68,6 +68,7 @@ pub struct PcrProduct {
 
 impl PcrProduct {
     /// Reference identifier (first whitespace-delimited token of the header)
+    #[must_use] 
     pub fn reference_id(&self) -> &str {
         self.reference_header
             .split_whitespace()
@@ -76,6 +77,7 @@ impl PcrProduct {
     }
 
     /// Generate the output header for this product
+    #[must_use] 
     pub fn header(&self) -> String {
         let strand_suffix = match self.strand {
             Strand::Fwd => "",
@@ -94,17 +96,20 @@ impl PcrProduct {
     }
 
     /// Get the product length
+    #[must_use] 
     pub fn len(&self) -> usize {
         self.sequence.len()
     }
 
     /// Check if product is empty
+    #[must_use] 
     pub fn is_empty(&self) -> bool {
         self.sequence.is_empty()
     }
 }
 
 /// Find all PCR products for a single sequence and primer pair
+#[must_use] 
 pub fn find_pcr_products(
     record: &SequenceRecord,
     primer: &PrimerPair,
@@ -384,6 +389,7 @@ fn find_rc_strand_products(
 }
 
 /// Remove duplicate product sequences per reference header
+#[must_use] 
 pub fn remove_duplicate_products_by_reference(products: Vec<PcrProduct>) -> Vec<PcrProduct> {
     use std::collections::{HashMap, HashSet};
 
@@ -417,6 +423,7 @@ fn assign_case_numbers_by_reference(products: &mut [PcrProduct]) {
     }
 }
 
+#[must_use] 
 pub fn canonical_sequence(sequence: &[u8]) -> Vec<u8> {
     let rc = reverse_complement(sequence);
     if rc.as_slice() < sequence {

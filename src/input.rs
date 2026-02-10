@@ -27,6 +27,7 @@ pub enum InputFormat {
 /// Detect the input format from file extension.
 /// Returns `None` for unrecognized extensions.
 /// Strips `.gz` suffix before checking the inner extension.
+#[must_use] 
 pub fn detect_format(path: &Path) -> Option<InputFormat> {
     // Strip .gz if present to get to the real extension
     let path = if is_gzipped(path) {
@@ -57,16 +58,16 @@ pub fn expand_input_patterns(patterns: &[String]) -> Result<Vec<PathBuf>> {
         // Check if it's a glob pattern
         if pattern.contains('*') || pattern.contains('?') || pattern.contains('[') {
             let matches: Vec<_> = glob::glob(pattern)
-                .with_context(|| format!("Invalid glob pattern: {}", pattern))?
+                .with_context(|| format!("Invalid glob pattern: {pattern}"))?
                 .collect();
 
             if matches.is_empty() {
-                log::warn!("Glob pattern '{}' matched no files", pattern);
+                log::warn!("Glob pattern '{pattern}' matched no files");
             }
 
             for entry in matches {
                 let path =
-                    entry.with_context(|| format!("Error reading glob match for '{}'", pattern))?;
+                    entry.with_context(|| format!("Error reading glob match for '{pattern}'"))?;
                 if path.is_file() {
                     files.push(path);
                 }
@@ -111,6 +112,7 @@ pub fn expand_input_patterns(patterns: &[String]) -> Result<Vec<PathBuf>> {
 }
 
 /// Check if a file is gzip compressed based on extension
+#[must_use] 
 pub fn is_gzipped(path: &Path) -> bool {
     path.extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case("gz"))
@@ -138,8 +140,8 @@ fn is_bgzf(path: &Path) -> Result<bool> {
     Ok(header[12] == b'B' && header[13] == b'C')
 }
 
-/// Read and decompress a gzip file using flate2's MultiGzDecoder
-/// MultiGzDecoder handles concatenated/multi-member gzip files correctly.
+/// Read and decompress a gzip file using flate2's `MultiGzDecoder`
+/// `MultiGzDecoder` handles concatenated/multi-member gzip files correctly.
 /// Pre-allocates based on compressed size × estimated compression ratio
 /// to avoid repeated reallocation during decompression.
 fn read_gzipped_file(path: &Path) -> Result<Vec<u8>> {
@@ -170,7 +172,7 @@ fn read_plain_file(path: &Path) -> Result<Vec<u8>> {
     Ok(contents)
 }
 
-/// Read all sequences from a single file (FASTA or GenBank)
+/// Read all sequences from a single file (FASTA or `GenBank`)
 pub fn read_sequences_from_file(path: &Path) -> Result<Vec<SequenceRecord>> {
     let format = detect_format(path)
         .ok_or_else(|| anyhow::anyhow!("Unsupported format: {}", path.display()))?;
@@ -192,7 +194,7 @@ pub fn read_sequences_from_file(path: &Path) -> Result<Vec<SequenceRecord>> {
 // GenBank Parser
 // ============================================================================
 
-/// Parse GenBank records from raw data (uses slice-based fast path)
+/// Parse `GenBank` records from raw data (uses slice-based fast path)
 fn parse_genbank(data: &[u8], source: &Path) -> Result<Vec<SequenceRecord>> {
     use crate::genbank::parse_genbank_slice;
 
@@ -216,10 +218,10 @@ fn parse_genbank(data: &[u8], source: &Path) -> Result<Vec<SequenceRecord>> {
             .filter(|s| !s.is_empty())
             .or(rec.accession.as_deref().filter(|s| !s.is_empty()))
             .or(rec.definition.as_deref().filter(|s| !s.is_empty()))
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .unwrap_or_else(|| {
                 unknown_counter += 1;
-                format!("unknown_{}", unknown_counter)
+                format!("unknown_{unknown_counter}")
             });
 
         if rec.is_circular {
@@ -248,7 +250,7 @@ fn parse_genbank(data: &[u8], source: &Path) -> Result<Vec<SequenceRecord>> {
 // Streaming FASTA Reader (for memory-efficient single-file processing)
 // ============================================================================
 
-/// Create a streaming reader that yields sequences lazily from FASTA or GenBank files.
+/// Create a streaming reader that yields sequences lazily from FASTA or `GenBank` files.
 /// This enables producer-consumer parallelism without loading entire file into memory.
 /// For BGZF-compressed files, uses parallel decompression via gzp.
 #[cfg(feature = "parser_seqio")]
@@ -330,7 +332,7 @@ impl<R: Read + Send> Iterator for StreamingFastaIter<R> {
             Some(Ok(record)) => {
                 let header = match record.id() {
                     Ok(id) => id.to_string(),
-                    Err(e) => return Some(Err(anyhow::anyhow!("Invalid UTF-8 in header: {}", e))),
+                    Err(e) => return Some(Err(anyhow::anyhow!("Invalid UTF-8 in header: {e}"))),
                 };
                 let mut sequence = record.full_seq().into_owned();
                 sequence.make_ascii_uppercase();
@@ -341,7 +343,7 @@ impl<R: Read + Send> Iterator for StreamingFastaIter<R> {
                     source_file: self.source_file.clone(),
                 }))
             }
-            Some(Err(e)) => Some(Err(anyhow::anyhow!("FASTA parse error: {}", e))),
+            Some(Err(e)) => Some(Err(anyhow::anyhow!("FASTA parse error: {e}"))),
             None => None,
         }
     }
@@ -391,7 +393,7 @@ impl<R: Read + Send> Iterator for StreamingGenbankIter<R> {
                         .filter(|s| !s.is_empty())
                         .or(rec.accession.as_deref().filter(|s| !s.is_empty()))
                         .or(rec.definition.as_deref().filter(|s| !s.is_empty()))
-                        .map(|s| s.to_string())
+                        .map(std::string::ToString::to_string)
                         .unwrap_or_else(|| {
                             self.unknown_counter += 1;
                             format!("unknown_{}", self.unknown_counter)
@@ -399,8 +401,7 @@ impl<R: Read + Send> Iterator for StreamingGenbankIter<R> {
 
                     if rec.is_circular {
                         log::info!(
-                            "Record '{}' has circular topology; use --circular flag for wrap-around products",
-                            header
+                            "Record '{header}' has circular topology; use --circular flag for wrap-around products"
                         );
                     }
 
@@ -414,7 +415,7 @@ impl<R: Read + Send> Iterator for StreamingGenbankIter<R> {
                     }));
                 }
                 Some(Err(e)) => {
-                    return Some(Err(anyhow::anyhow!("GenBank parse error: {}", e)));
+                    return Some(Err(anyhow::anyhow!("GenBank parse error: {e}")));
                 }
                 None => return None,
             }
@@ -530,6 +531,7 @@ compile_error!(
 );
 
 /// Return the name of the active FASTA parser
+#[must_use] 
 pub fn parser_name() -> &'static str {
     #[cfg(feature = "parser_seqio")]
     {

@@ -35,11 +35,13 @@ impl PrimerPair {
     }
 
     /// Get forward primer length
+    #[must_use] 
     pub fn forward_len(&self) -> usize {
         self.forward.len()
     }
 
     /// Get reverse primer length
+    #[must_use] 
     pub fn reverse_len(&self) -> usize {
         self.reverse.len()
     }
@@ -153,23 +155,21 @@ fn parse_primers_from_string(input: &str) -> Result<Vec<PrimerPair>> {
 
         if name.is_empty() || forward.is_empty() || reverse.is_empty() {
             bail!(
-                "Primer specification '{}' has empty fields. \
-                 Expected format: 'name:forward:reverse'",
-                spec
+                "Primer specification '{spec}' has empty fields. \
+                 Expected format: 'name:forward:reverse'"
             );
         }
 
         let primer = PrimerPair::new(name, forward.as_bytes(), reverse.as_bytes())
-            .with_context(|| format!("Error parsing primer specification '{}'", spec))?;
+            .with_context(|| format!("Error parsing primer specification '{spec}'"))?;
 
         primers.push(primer);
     }
 
     if primers.is_empty() {
         bail!(
-            "No valid primers found in input '{}'. \
-             Expected format: 'name:forward:reverse' or path to CSV file",
-            input
+            "No valid primers found in input '{input}'. \
+             Expected format: 'name:forward:reverse' or path to CSV file"
         );
     }
 

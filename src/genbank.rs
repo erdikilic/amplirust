@@ -1,4 +1,4 @@
-//! Lightweight GenBank format parser.
+//! Lightweight `GenBank` format parser.
 //!
 //! Only extracts fields needed for PCR analysis: LOCUS name, DEFINITION,
 //! ACCESSION, topology (circular/linear), and ORIGIN sequence data.
@@ -7,7 +7,7 @@
 use anyhow::{Context, Result};
 use std::io::{BufRead, BufReader, Read};
 
-/// A parsed GenBank record containing only the fields we need.
+/// A parsed `GenBank` record containing only the fields we need.
 pub struct GenbankRecord {
     pub name: Option<String>,
     pub accession: Option<String>,
@@ -20,7 +20,7 @@ pub struct GenbankRecord {
 pub struct GenbankReader<B: BufRead> {
     reader: B,
     line_buf: String,
-    /// True if we've already read a LOCUS line into line_buf for the next record.
+    /// True if we've already read a LOCUS line into `line_buf` for the next record.
     has_pending_locus: bool,
 }
 
@@ -209,7 +209,7 @@ fn parse_locus_line(line: &str, record: &mut GenbankRecord) {
     record.is_circular = lower.contains("circular");
 }
 
-/// Check if a line starts with a known GenBank top-level keyword.
+/// Check if a line starts with a known `GenBank` top-level keyword.
 /// Used to detect the end of continuation lines.
 fn is_keyword(line: &str) -> bool {
     const KEYWORDS: &[&str] = &[
@@ -268,12 +268,13 @@ fn read_origin_sequence<B: BufRead>(
 
 use memchr::memmem;
 
-/// Parse all GenBank records from an in-memory byte slice.
+/// Parse all `GenBank` records from an in-memory byte slice.
 ///
 /// This is a fast path that operates directly on `&[u8]` without
 /// `BufReader`/`read_line` overhead. It uses `memchr::memmem` to find record
 /// boundaries (`\nLOCUS`) and jump directly to `\nORIGIN`, skipping FEATURES
 /// entirely.
+#[must_use] 
 pub fn parse_genbank_slice(data: &[u8]) -> Vec<GenbankRecord> {
     if data.is_empty() {
         return Vec::new();
@@ -313,7 +314,7 @@ pub fn parse_genbank_slice(data: &[u8]) -> Vec<GenbankRecord> {
     records
 }
 
-/// Parse a single GenBank record from a byte slice that starts with `LOCUS`.
+/// Parse a single `GenBank` record from a byte slice that starts with `LOCUS`.
 fn parse_single_record_slice(
     data: &[u8],
     origin_finder: &memmem::FinderRev,
@@ -351,8 +352,7 @@ fn parse_single_record_slice(
         let seq_region = &data[origin_line_end..];
         // Find the record terminator "//" within the sequence region.
         let term_pos = memmem::find(seq_region, b"\n//")
-            .map(|p| p + 1) // include the newline, stop before "//"
-            .unwrap_or(seq_region.len());
+            .map_or(seq_region.len(), |p| p + 1);
         extract_origin_fast(&seq_region[..term_pos], &mut record.seq);
     }
 
@@ -363,7 +363,7 @@ fn parse_single_record_slice(
 /// If `origin_pos` is known, uses it as an upper bound to avoid scanning into FEATURES.
 fn find_header_end(data: &[u8], after_locus: usize, origin_pos: Option<usize>) -> usize {
     // If we know where ORIGIN is, limit the scan region.
-    let limit = origin_pos.map(|p| p + 1).unwrap_or(data.len());
+    let limit = origin_pos.map_or(data.len(), |p| p + 1);
     // Scan line-by-line from after the LOCUS line.
     let mut pos = after_locus + 1;
     while pos < limit {
@@ -490,12 +490,11 @@ fn trim_bytes(data: &[u8]) -> &[u8] {
     let end = data
         .iter()
         .rposition(|b| !b.is_ascii_whitespace())
-        .map(|p| p + 1)
-        .unwrap_or(start);
+        .map_or(start, |p| p + 1);
     &data[start..end]
 }
 
-/// Check if a byte line starts with a known GenBank top-level keyword.
+/// Check if a byte line starts with a known `GenBank` top-level keyword.
 fn is_keyword_bytes(line: &[u8]) -> bool {
     const KEYWORDS: &[&[u8]] = &[
         b"LOCUS",

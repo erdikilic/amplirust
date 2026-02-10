@@ -133,7 +133,7 @@ impl TsvWriter {
         let file = File::create(output_path)
             .with_context(|| format!("Failed to create TSV file: {}", output_path.display()))?;
         let mut writer = BufWriter::with_capacity(64 * 1024, file);
-        writeln!(writer, "{}", TSV_HEADER)?;
+        writeln!(writer, "{TSV_HEADER}")?;
         Ok(Self { writer })
     }
 
@@ -206,6 +206,7 @@ pub struct RunSummary {
 
 impl RunSummary {
     /// Create summary from pre-aggregated counts
+    #[must_use] 
     pub fn from_counts(
         total_sequences: usize,
         total_primers: usize,
@@ -229,6 +230,7 @@ impl RunSummary {
     }
 
     /// Create summary from products
+    #[must_use] 
     pub fn from_products(
         products: &[PcrProduct],
         num_sequences: usize,
@@ -273,14 +275,14 @@ impl RunSummary {
         if !self.products_per_primer.is_empty() {
             log::info!("Products by primer:");
             for (primer, count) in &self.products_per_primer {
-                log::info!("  {}: {}", primer, count);
+                log::info!("  {primer}: {count}");
             }
         }
 
         if self.products_per_reference.len() <= 10 {
             log::info!("Products by reference:");
             for (ref_name, count) in &self.products_per_reference {
-                log::info!("  {}: {}", ref_name, count);
+                log::info!("  {ref_name}: {count}");
             }
         } else {
             log::info!(
@@ -302,7 +304,7 @@ impl RunSummary {
             eprintln!();
             eprintln!("Products by primer:");
             for (primer, count) in &self.products_per_primer {
-                eprintln!("  {}: {}", primer, count);
+                eprintln!("  {primer}: {count}");
             }
         }
 
@@ -311,7 +313,7 @@ impl RunSummary {
             if self.products_per_reference.len() <= 10 {
                 eprintln!("Products by reference:");
                 for (ref_name, count) in &self.products_per_reference {
-                    eprintln!("  {}: {}", ref_name, count);
+                    eprintln!("  {ref_name}: {count}");
                 }
             } else {
                 eprintln!(
