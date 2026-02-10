@@ -117,6 +117,8 @@ pub fn circular_to_original_pos(pos: usize, original_len: usize) -> usize {
 mod tests {
     use super::*;
 
+    // ── complement ──────────────────────────────────────────────────────
+
     #[test]
     fn test_complement() {
         assert_eq!(complement(b'A'), b'T');
@@ -137,12 +139,83 @@ mod tests {
     }
 
     #[test]
+    fn test_complement_rna() {
+        assert_eq!(complement(b'U'), b'A');
+        assert_eq!(complement(b'u'), b'a');
+    }
+
+    #[test]
+    fn test_complement_non_ascii() {
+        // Bytes >= 128 should return N
+        assert_eq!(complement(128), b'N');
+        assert_eq!(complement(255), b'N');
+        assert_eq!(complement(200), b'N');
+    }
+
+    #[test]
+    fn test_complement_lowercase() {
+        assert_eq!(complement(b'a'), b't');
+        assert_eq!(complement(b't'), b'a');
+        assert_eq!(complement(b'g'), b'c');
+        assert_eq!(complement(b'c'), b'g');
+    }
+
+    // ── reverse_complement ──────────────────────────────────────────────
+
+    #[test]
     fn test_reverse_complement() {
         assert_eq!(reverse_complement(b"ACGT"), b"ACGT");
         assert_eq!(reverse_complement(b"AAAA"), b"TTTT");
         assert_eq!(reverse_complement(b"ATCG"), b"CGAT");
         assert_eq!(reverse_complement(b""), b"");
     }
+
+    #[test]
+    fn test_rc_empty() {
+        assert_eq!(reverse_complement(b""), b"");
+    }
+
+    #[test]
+    fn test_rc_single_base() {
+        assert_eq!(reverse_complement(b"A"), b"T");
+    }
+
+    #[test]
+    fn test_rc_palindrome() {
+        // ACGT is its own reverse complement
+        assert_eq!(reverse_complement(b"ACGT"), b"ACGT");
+    }
+
+    #[test]
+    fn test_rc_all_same() {
+        assert_eq!(reverse_complement(b"AAAA"), b"TTTT");
+    }
+
+    #[test]
+    fn test_rc_iupac_codes() {
+        // R->Y, Y->R, S->S, W->W, K->M, M->K
+        // Reverse of RYSWKM = MKWSYR, then complement each:
+        // M->K, K->M, W->W, S->S, Y->R, R->Y => KMWSRY
+        assert_eq!(reverse_complement(b"RYSWKM"), b"KMWSRY");
+    }
+
+    #[test]
+    fn test_rc_lowercase() {
+        assert_eq!(reverse_complement(b"acgt"), b"acgt");
+    }
+
+    #[test]
+    fn test_rc_involution() {
+        // Applying reverse complement twice should return the original
+        let sequences: &[&[u8]] = &[b"ACGT", b"RYSWKM", b"ATCGATCG", b"A", b""];
+        for seq in sequences {
+            let rc = reverse_complement(seq);
+            let rc_rc = reverse_complement(&rc);
+            assert_eq!(&rc_rc, *seq, "RC involution failed for {:?}", String::from_utf8_lossy(seq));
+        }
+    }
+
+    // ── calculate_identity ──────────────────────────────────────────────
 
     #[test]
     fn test_calculate_identity() {
@@ -153,11 +226,99 @@ mod tests {
     }
 
     #[test]
+    fn test_identity_perfect() {
+        assert!((calculate_identity(0, 20) - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_identity_zero_len() {
+        assert!((calculate_identity(0, 0) - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_identity_half() {
+        assert!((calculate_identity(10, 20) - 0.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_identity_distance_exceeds_len() {
+        // saturating_sub prevents negative: (20 - 25).saturating = 0
+        assert!((calculate_identity(25, 20) - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_identity_distance_equals_len() {
+        assert!((calculate_identity(20, 20) - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_identity_one_error() {
+        assert!((calculate_identity(1, 100) - 0.99).abs() < f64::EPSILON);
+    }
+
+    // ── make_circular_searchable ────────────────────────────────────────
+
+    #[test]
     fn test_circular_searchable() {
         let seq = b"ABCDEFGH";
         let extended = make_circular_searchable(seq, 4);
         assert_eq!(&extended, b"ABCDEFGHABC");
     }
+
+    #[test]
+    fn test_make_circular_searchable_empty() {
+        assert_eq!(make_circular_searchable(b"", 10), b"");
+    }
+
+    #[test]
+    fn test_make_circular_searchable_max_len_zero() {
+        // max_product_len=0 => extend_len = 0.saturating_sub(1) = 0
+        let seq = b"ACGT";
+        let result = make_circular_searchable(seq, 0);
+        assert_eq!(&result, b"ACGT");
+    }
+
+    #[test]
+    fn test_make_circular_searchable_max_len_one() {
+        // max_product_len=1 => extend_len = (1-1).min(4) = 0
+        let seq = b"ACGT";
+        let result = make_circular_searchable(seq, 1);
+        assert_eq!(&result, b"ACGT");
+    }
+
+    #[test]
+    fn test_make_circular_searchable_seq_shorter_than_max() {
+        // seq len 4, max_product_len=10 => extend_len = (10-1).min(4) = 4
+        let seq = b"ABCD";
+        let result = make_circular_searchable(seq, 10);
+        assert_eq!(&result, b"ABCDABCD");
+    }
+
+    #[test]
+    fn test_make_circular_searchable_seq_equal_max() {
+        // seq len 8, max_product_len=8 => extend_len = (8-1).min(8) = 7
+        let seq = b"ABCDEFGH";
+        let result = make_circular_searchable(seq, 8);
+        assert_eq!(&result, b"ABCDEFGHABCDEFG");
+    }
+
+    #[test]
+    fn test_make_circular_searchable_seq_longer_than_max() {
+        // seq len 20, max_product_len=4 => extend_len = (4-1).min(20) = 3
+        let seq = b"ABCDEFGHIJKLMNOPQRST";
+        let result = make_circular_searchable(seq, 4);
+        assert_eq!(&result, b"ABCDEFGHIJKLMNOPQRSTABC");
+    }
+
+    #[test]
+    fn test_make_circular_searchable_single_base() {
+        // seq=[A], max_product_len=5 => extend_len = (5-1).min(1) = 1
+        let seq = b"A";
+        let result = make_circular_searchable(seq, 5);
+        assert_eq!(&result, b"AA");
+    }
+
+    // ── is_circular_wrap ────────────────────────────────────────────────
 
     #[test]
     fn test_circular_wrap() {
@@ -167,9 +328,70 @@ mod tests {
     }
 
     #[test]
+    fn test_circular_wrap_at_zero() {
+        assert!(!is_circular_wrap(0, 10));
+    }
+
+    #[test]
+    fn test_circular_wrap_at_last() {
+        assert!(!is_circular_wrap(9, 10));
+    }
+
+    #[test]
+    fn test_circular_wrap_at_boundary() {
+        assert!(is_circular_wrap(10, 10));
+    }
+
+    #[test]
+    fn test_circular_wrap_well_beyond() {
+        assert!(is_circular_wrap(25, 10));
+    }
+
+    #[test]
+    fn test_circular_wrap_original_len_one() {
+        assert!(!is_circular_wrap(0, 1));
+        assert!(is_circular_wrap(1, 1));
+    }
+
+    // ── circular_to_original_pos ────────────────────────────────────────
+
+    #[test]
     fn test_circular_to_original() {
         assert_eq!(circular_to_original_pos(5, 10), 5);
         assert_eq!(circular_to_original_pos(10, 10), 0);
         assert_eq!(circular_to_original_pos(12, 10), 2);
+    }
+
+    #[test]
+    fn test_circular_pos_zero() {
+        assert_eq!(circular_to_original_pos(0, 10), 0);
+        assert_eq!(circular_to_original_pos(0, 1), 0);
+        assert_eq!(circular_to_original_pos(0, 100), 0);
+    }
+
+    #[test]
+    fn test_circular_pos_at_len() {
+        // pos=10, original_len=10 => 10 % 10 = 0 (wraps)
+        assert_eq!(circular_to_original_pos(10, 10), 0);
+    }
+
+    #[test]
+    fn test_circular_pos_beyond_len() {
+        // pos=13, original_len=10 => 13 % 10 = 3
+        assert_eq!(circular_to_original_pos(13, 10), 3);
+    }
+
+    #[test]
+    fn test_circular_pos_original_len_one() {
+        // Everything maps to 0 when original_len=1
+        assert_eq!(circular_to_original_pos(0, 1), 0);
+        assert_eq!(circular_to_original_pos(1, 1), 0);
+        assert_eq!(circular_to_original_pos(5, 1), 0);
+    }
+
+    #[test]
+    fn test_circular_pos_double_wrap() {
+        // pos=25, original_len=10 => 25 % 10 = 5
+        assert_eq!(circular_to_original_pos(25, 10), 5);
     }
 }
