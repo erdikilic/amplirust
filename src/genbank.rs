@@ -98,6 +98,10 @@ impl<B: BufRead> GenbankReader<B> {
                 .context("Failed to read GenBank data")?;
             if n == 0 {
                 // EOF mid-record — return what we have
+                log::warn!(
+                    "Truncated GenBank record '{}': EOF reached before record terminator '//'",
+                    record.name.as_deref().unwrap_or("<unnamed>")
+                );
                 break;
             }
 
@@ -244,6 +248,9 @@ fn read_origin_sequence<B: BufRead>(
             .read_line(line_buf)
             .context("Failed to read GenBank sequence data")?;
         if n == 0 {
+            log::warn!(
+                "Truncated GenBank record: EOF reached in ORIGIN section before record terminator '//'",
+            );
             return Ok(false); // EOF
         }
         let trimmed = line_buf.trim();

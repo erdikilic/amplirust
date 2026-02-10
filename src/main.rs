@@ -156,7 +156,7 @@ fn run(args: &Args) -> Result<()> {
         pb.set_style(
             ProgressStyle::default_bar()
                 .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} files ({eta})")
-                .unwrap()
+                .expect("hardcoded progress bar template should be valid")
                 .progress_chars("#>-"),
         );
         pb.set_message("Reading files");
@@ -290,7 +290,7 @@ fn run(args: &Args) -> Result<()> {
             pb.set_style(
                 ProgressStyle::default_spinner()
                     .template("{spinner:.green} [{elapsed_precise}] {pos} sequences processed")
-                    .unwrap(),
+                    .expect("hardcoded progress bar template should be valid"),
             );
             Some(Arc::new(pb))
         } else {
