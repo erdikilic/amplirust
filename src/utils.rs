@@ -394,4 +394,45 @@ mod tests {
         // pos=25, original_len=10 => 25 % 10 = 5
         assert_eq!(circular_to_original_pos(25, 10), 5);
     }
+
+    // ── reverse_complement_into (mutation gap) ────────────────────────────
+
+    #[test]
+    fn test_reverse_complement_into_basic() {
+        let mut output = Vec::new();
+        reverse_complement_into(b"ACGT", &mut output);
+        assert_eq!(output, b"ACGT"); // ACGT is palindromic RC
+    }
+
+    #[test]
+    fn test_reverse_complement_into_non_palindrome() {
+        let mut output = Vec::new();
+        reverse_complement_into(b"AAAA", &mut output);
+        assert_eq!(output, b"TTTT");
+    }
+
+    #[test]
+    fn test_reverse_complement_into_agrees_with_reverse_complement() {
+        let sequences: &[&[u8]] = &[b"ATCG", b"RYSWKM", b"A", b"GATTACA"];
+        for seq in sequences {
+            let mut output = Vec::new();
+            reverse_complement_into(seq, &mut output);
+            assert_eq!(output, reverse_complement(seq),
+                "reverse_complement_into disagrees for {:?}", String::from_utf8_lossy(seq));
+        }
+    }
+
+    #[test]
+    fn test_reverse_complement_into_empty() {
+        let mut output = Vec::new();
+        reverse_complement_into(b"", &mut output);
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn test_reverse_complement_into_clears_output() {
+        let mut output = vec![b'X', b'Y', b'Z'];
+        reverse_complement_into(b"AT", &mut output);
+        assert_eq!(output, b"AT"); // AT -> RC = AT; old contents cleared
+    }
 }

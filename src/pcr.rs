@@ -1078,4 +1078,205 @@ mod tests {
             }
         }
     }
+
+    // ── Tests for mutation-gap coverage ──────────────────────────────────
+
+    #[test]
+    fn test_pcr_product_is_empty() {
+        let product = PcrProduct {
+            reference_header: "chr1".to_string(),
+            source_file: "test.fa".to_string(),
+            primer_name: "test".to_string(),
+            sequence: vec![],
+            full_length: 0,
+            fwd_match: PrimerMatch {
+                start: 0, end: 0, edit_distance: 0,
+                strand: Strand::Fwd, cigar: String::new(), identity: 1.0,
+            },
+            rev_match: PrimerMatch {
+                start: 0, end: 0, edit_distance: 0,
+                strand: Strand::Fwd, cigar: String::new(), identity: 1.0,
+            },
+            strand: Strand::Fwd,
+            is_circular_wrap: false,
+            original_start: 0,
+            original_end: 0,
+            case_number: 1,
+        };
+        assert!(product.is_empty(), "empty sequence should be empty");
+        assert_eq!(product.len(), 0);
+
+        let product2 = PcrProduct {
+            sequence: b"ACGT".to_vec(),
+            full_length: 4,
+            ..product
+        };
+        assert!(!product2.is_empty(), "non-empty sequence should not be empty");
+        assert_eq!(product2.len(), 4);
+    }
+
+    #[test]
+    fn test_canonical_sequence_ordering() {
+        // canonical_sequence picks the lexicographically smaller of seq and its RC
+        let seq1 = b"AAAA"; // RC = TTTT, AAAA < TTTT so canonical = AAAA
+        assert_eq!(canonical_sequence(seq1), b"AAAA");
+
+        let seq2 = b"TTTT"; // RC = AAAA, AAAA < TTTT so canonical = AAAA
+        assert_eq!(canonical_sequence(seq2), b"AAAA");
+
+        // Both should give the same canonical form
+        assert_eq!(canonical_sequence(b"AAAA"), canonical_sequence(b"TTTT"));
+    }
+
+    #[test]
+    fn test_canonical_sequence_palindrome() {
+        // ACGT is its own RC, so canonical = ACGT
+        let result = canonical_sequence(b"ACGT");
+        assert_eq!(result, b"ACGT");
+    }
+
+    #[test]
+    fn test_canonical_sequence_non_empty() {
+        // Ensure canonical_sequence returns non-empty for non-empty input
+        let result = canonical_sequence(b"A");
+        assert!(!result.is_empty());
+        // RC of A is T, A < T so canonical = A
+        assert_eq!(result, b"A");
+    }
+
+    #[test]
+    fn test_canonical_sequence_uses_rc_when_smaller() {
+        // GGGC -> RC is GCCC. Compare: GCCC < GGGC so canonical = GCCC
+        let result = canonical_sequence(b"GGGC");
+        assert_eq!(result, b"GCCC");
+    }
+
+    #[test]
+    fn test_assign_case_numbers_multiple_references() {
+        let base = PcrProduct {
+            reference_header: "chr1".to_string(),
+            source_file: "test.fa".to_string(),
+            primer_name: "test".to_string(),
+            sequence: b"ACGT".to_vec(),
+            full_length: 4,
+            fwd_match: PrimerMatch {
+                start: 0, end: 4, edit_distance: 0,
+                strand: Strand::Fwd, cigar: "4=".to_string(), identity: 1.0,
+            },
+            rev_match: PrimerMatch {
+                start: 10, end: 14, edit_distance: 0,
+                strand: Strand::Fwd, cigar: "4=".to_string(), identity: 1.0,
+            },
+            strand: Strand::Fwd,
+            is_circular_wrap: false,
+            original_start: 0,
+            original_end: 14,
+            case_number: 0,
+        };
+
+        let mut product2 = base.clone();
+        product2.sequence = b"ACGTACGT".to_vec();
+
+        let mut product3 = base.clone();
+        product3.reference_header = "chr2".to_string();
+
+        let mut products = vec![base, product2, product3];
+        assign_case_numbers_by_reference(&mut products);
+
+        // chr1 products should be 1, 2; chr2 product should be 1
+        assert_eq!(products[0].case_number, 1);
+        assert_eq!(products[1].case_number, 2);
+        assert_eq!(products[2].case_number, 1);
+    }
+
+    #[test]
+    fn test_product_length_at_min_boundary() {
+        // Test that products exactly at min_len are included
+        // Create a sequence where ACGT (fwd) is directly followed by ACGT (rev RC)
+        // Product = ACGT + internal + ACGT = exactly 8bp
+        let record = make_record("test", b"AAAACGTAAAATGCATTTT");
+        // fwd ACGT at 4..8, rev primer TGCA -> RC = TGCA at 12..16
+        let primer = PrimerPair::new("test", b"ACGT", b"TGCA").unwrap();
+
+        let config = PcrConfig {
+            match_config: MatchConfig {
+                max_errors: 0,
+                min_identity: 1.0,
+                search_rc: false,
+            },
+            min_len: 12, // product is 4 (fwd) + 4 (internal) + 4 (rev) = 12
+            max_len: 12,
+            circular: false,
+            trim_primers: false,
+            max_n_fraction: 1.0,
+        };
+
+        let products = find_pcr_products(&record, &primer, &config);
+        assert!(!products.is_empty(), "Product exactly at min_len should be included");
+        for p in &products {
+            assert!(p.full_length >= config.min_len);
+            assert!(p.full_length <= config.max_len);
+        }
+    }
+
+    #[test]
+    fn test_product_length_below_min_excluded() {
+        // Products shorter than min_len should be excluded
+        let record = make_record("test", b"ACGTACGTACGT");
+        // Small product between consecutive ACGTs
+        let primer = PrimerPair::new("test", b"ACGT", b"ACGT").unwrap();
+
+        let config = PcrConfig {
+            match_config: MatchConfig {
+                max_errors: 0,
+                min_identity: 1.0,
+                search_rc: false,
+            },
+            min_len: 100, // Much larger than any possible product
+            max_len: 200,
+            circular: false,
+            trim_primers: false,
+            max_n_fraction: 1.0,
+        };
+
+        let products = find_pcr_products(&record, &primer, &config);
+        assert!(products.is_empty(), "Products below min_len should be excluded");
+    }
+
+    #[test]
+    fn test_product_length_above_max_excluded() {
+        // Use non-palindromic primers with non-IUPAC-ambiguous internal sequence.
+        // Forward: AAGC, Reverse: TTCA (RC of TTCA = TGAA)
+        // Internal sequence uses only A/T to avoid matching primers.
+        let record = make_record("test",
+            b"CCCCAAGCATATATATATATATATATTGAACCCC");
+        // positions: 4..8=AAGC, 29..33=TGAA (RC of TTCA)
+        let primer = PrimerPair::new("test", b"AAGC", b"TTCA").unwrap();
+
+        // Find with generous max_len to discover actual product
+        let config_ok = PcrConfig {
+            match_config: MatchConfig {
+                max_errors: 0,
+                min_identity: 1.0,
+                search_rc: false,
+            },
+            min_len: 4,
+            max_len: 100,
+            circular: false,
+            trim_primers: false,
+            max_n_fraction: 1.0,
+        };
+        let products_ok = find_pcr_products(&record, &primer, &config_ok);
+        assert!(!products_ok.is_empty(), "Sanity: should find product with large max_len");
+        let actual_len = products_ok[0].full_length;
+        assert!(actual_len > 8, "Product should be nontrivial length");
+
+        // Now set max_len to one less than actual product length.
+        let config_tight = PcrConfig {
+            max_len: actual_len - 1,
+            ..config_ok.clone()
+        };
+        let products_tight = find_pcr_products(&record, &primer, &config_tight);
+        assert!(products_tight.is_empty(), "Products above max_len should be excluded");
+    }
 }
