@@ -1,0 +1,6 @@
+LOCUS       TruncatedSeq          100 bp    DNA     linear BCT
+DEFINITION  Truncated test sequence.
+ACCESSION   TRUNC001
+ORIGIN
+        1 acgtacgtac gtacgtacgt acgtacgtac gtacgtacgt acgtacgtac gtacgtacgt
+       61 acgtacgtac gtacgtac
