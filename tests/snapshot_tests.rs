@@ -1,8 +1,9 @@
 use amplirust::matcher::PrimerMatch;
-use amplirust::output::write_fasta_record;
+use amplirust::output::{write_fasta_record, write_tsv};
 use amplirust::pcr::PcrProduct;
 use insta::assert_snapshot;
 use sassy::Strand;
+use tempfile::NamedTempFile;
 
 // ---------------------------------------------------------------------------
 // Deterministic product construction helpers
@@ -178,4 +179,51 @@ fn fasta_long_sequence_wrapping() {
     }
 
     assert_snapshot!("fasta_long_sequence", content);
+}
+
+// ---------------------------------------------------------------------------
+// TSV snapshot tests (TEST-11)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tsv_output_with_header() {
+    let products = vec![make_fwd_product()];
+    let tmp = NamedTempFile::with_suffix(".tsv").unwrap();
+    write_tsv(&products, tmp.path()).unwrap();
+    let content = std::fs::read_to_string(tmp.path()).unwrap();
+
+    // Sanity: header row should have 19 columns
+    let header_cols: Vec<&str> = content.lines().next().unwrap().split('\t').collect();
+    assert_eq!(header_cols.len(), 19, "TSV header should have 19 columns");
+
+    assert_snapshot!("tsv_output_with_header", content);
+}
+
+#[test]
+fn tsv_multi_product() {
+    let products = vec![
+        make_fwd_product(),
+        make_rc_product(),
+        make_circular_wrap_product(),
+    ];
+    let tmp = NamedTempFile::with_suffix(".tsv").unwrap();
+    write_tsv(&products, tmp.path()).unwrap();
+    let content = std::fs::read_to_string(tmp.path()).unwrap();
+
+    // Should have header + 3 data rows
+    let line_count = content.lines().count();
+    assert_eq!(line_count, 4, "Should have 1 header + 3 data rows, got {line_count}");
+
+    // Each data row should have 19 columns
+    for (i, line) in content.lines().enumerate() {
+        let cols: Vec<&str> = line.split('\t').collect();
+        assert_eq!(
+            cols.len(),
+            19,
+            "Row {i} should have 19 columns, got {}",
+            cols.len()
+        );
+    }
+
+    assert_snapshot!("tsv_multi_product", content);
 }
