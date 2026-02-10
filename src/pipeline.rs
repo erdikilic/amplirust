@@ -316,8 +316,13 @@ pub fn run(args: &Args) -> Result<()> {
 
         // Reader thread: parses sequences lazily, sends to workers
         let file_clone = file.clone();
+        #[cfg(feature = "parser_needletail")]
+        let decomp_limit = args.max_decompression_size;
         let reader_handle = std::thread::spawn(move || -> Result<()> {
+            #[cfg(feature = "parser_seqio")]
             let reader = streaming_reader(&file_clone)?;
+            #[cfg(feature = "parser_needletail")]
+            let reader = streaming_reader(&file_clone, decomp_limit)?;
             for result in reader {
                 let record = result?;
                 if seq_tx.send(record).is_err() {

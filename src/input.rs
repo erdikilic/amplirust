@@ -1003,7 +1003,13 @@ mod tests {
         temp.write_all(gb.as_bytes()).unwrap();
         temp.flush().unwrap();
 
+        #[cfg(feature = "parser_seqio")]
         let records: Vec<_> = streaming_reader(temp.path())
+            .unwrap()
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
+        #[cfg(feature = "parser_needletail")]
+        let records: Vec<_> = streaming_reader(temp.path(), u64::MAX)
             .unwrap()
             .collect::<Result<Vec<_>>>()
             .unwrap();

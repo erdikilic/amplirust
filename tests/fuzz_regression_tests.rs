@@ -66,6 +66,7 @@ fn regression_genbank_slice_garbage() {
 // FASTA parser (seq_io) -- empty and minimal inputs must not panic
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "parser_seqio")]
 #[test]
 fn regression_fasta_empty() {
     let mut reader = seq_io::fasta::Reader::new(&b""[..]);
@@ -74,6 +75,7 @@ fn regression_fasta_empty() {
     }
 }
 
+#[cfg(feature = "parser_seqio")]
 #[test]
 fn regression_fasta_garbage() {
     let data = b"\xff\x00\x01\x02not a fasta file\n";
