@@ -8,6 +8,15 @@ use std::path::{Path, PathBuf};
 
 use crate::errors::ValidationError;
 
+/// Uppercase a sequence in-place, but only if it contains lowercase bytes.
+/// Most NCBI sequences are already uppercase, so the scan is a fast early exit.
+#[inline]
+fn ensure_uppercase(seq: &mut [u8]) {
+    if seq.iter().any(u8::is_ascii_lowercase) {
+        seq.make_ascii_uppercase();
+    }
+}
+
 /// A sequence record from FASTA input
 #[derive(Debug, Clone)]
 pub struct SequenceRecord {
@@ -285,7 +294,7 @@ fn parse_genbank(data: &[u8], source: &Path) -> Vec<SequenceRecord> {
         }
 
         let mut sequence = rec.seq;
-        sequence.make_ascii_uppercase();
+        ensure_uppercase(&mut sequence);
 
         records.push(SequenceRecord {
             header,
@@ -398,7 +407,7 @@ impl<R: Read + Send> Iterator for StreamingFastaIter<R> {
                     Err(e) => return Some(Err(anyhow::anyhow!("Invalid UTF-8 in header: {e}"))),
                 };
                 let mut sequence = record.full_seq().into_owned();
-                sequence.make_ascii_uppercase();
+                ensure_uppercase(&mut sequence);
 
                 Some(Ok(SequenceRecord {
                     header,
@@ -471,7 +480,7 @@ impl<R: Read + Send> Iterator for StreamingGenbankIter<R> {
                     }
 
                     let mut sequence = rec.seq;
-                    sequence.make_ascii_uppercase();
+                    ensure_uppercase(&mut sequence);
 
                     return Some(Ok(SequenceRecord {
                         header,
@@ -530,7 +539,7 @@ fn parse_fasta(data: &[u8], source: &Path) -> Result<Vec<SequenceRecord>> {
 
         // Use full_seq() which handles multi-line sequences efficiently
         let mut sequence = record.full_seq().into_owned();
-        sequence.make_ascii_uppercase();
+        ensure_uppercase(&mut sequence);
 
         records.push(SequenceRecord {
             header,
@@ -564,13 +573,9 @@ fn parse_fasta(data: &[u8], source: &Path) -> Result<Vec<SequenceRecord>> {
             .with_context(|| "Invalid UTF-8 in FASTA header")?
             .to_string();
 
-        // Get sequence and uppercase
-        let sequence: Vec<u8> = record
-            .seq()
-            .iter()
-            .copied()
-            .map(|b| b.to_ascii_uppercase())
-            .collect();
+        // Get sequence and lazy uppercase (skip if already uppercase)
+        let mut sequence: Vec<u8> = record.seq().to_vec();
+        ensure_uppercase(&mut sequence);
 
         records.push(SequenceRecord {
             header,
