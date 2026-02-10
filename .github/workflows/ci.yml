@@ -60,9 +60,9 @@ jobs:
       - name: Clean coverage data
         run: cargo llvm-cov clean --workspace
       - name: Run tests with parser_seqio coverage
-        run: cargo llvm-cov --no-report --features parser_seqio
+        run: cargo llvm-cov --no-report --no-default-features --features parser_seqio
       - name: Run tests with parser_needletail coverage
-        run: cargo llvm-cov --no-report --features parser_needletail
+        run: cargo llvm-cov --no-report --no-default-features --features parser_needletail
       - name: Generate merged LCOV report
         run: cargo llvm-cov report --lcov --output-path lcov.info
       - name: Upload coverage report
