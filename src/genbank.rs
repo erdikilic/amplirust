@@ -1222,4 +1222,205 @@ ORIGIN
             "acgtacgtacgtacgtacgtttttggggaaaacccctttt"
         );
     }
+
+    // ========================================================================
+    // Parity tests: verify streaming and slice parsers produce identical output
+    // ========================================================================
+
+    /// Assert that streaming and slice parsers produce field-by-field identical
+    /// records for the given input bytes.
+    fn assert_parser_parity(input: &[u8]) {
+        // Streaming path
+        let streaming: Vec<GenbankRecord> = GenbankReader::new(Cursor::new(input))
+            .collect::<Result<Vec<_>>>()
+            .expect("streaming parser should not error");
+        // Slice path
+        let sliced = parse_genbank_slice(input);
+
+        assert_eq!(
+            streaming.len(),
+            sliced.len(),
+            "Record count mismatch: streaming={}, slice={}",
+            streaming.len(),
+            sliced.len()
+        );
+
+        for (i, (s, sl)) in streaming.iter().zip(sliced.iter()).enumerate() {
+            assert_eq!(s.name, sl.name, "Record {i}: name mismatch");
+            assert_eq!(s.accession, sl.accession, "Record {i}: accession mismatch");
+            assert_eq!(
+                s.definition, sl.definition,
+                "Record {i}: definition mismatch"
+            );
+            assert_eq!(
+                s.is_circular, sl.is_circular,
+                "Record {i}: circular mismatch"
+            );
+            assert_eq!(s.seq, sl.seq, "Record {i}: sequence mismatch");
+        }
+    }
+
+    #[test]
+    fn parity_realistic_record() {
+        let input = b"\
+LOCUS       AB012345             2400 bp    DNA     circular BCT 01-JAN-2020
+DEFINITION  Escherichia coli strain K-12 16S ribosomal RNA gene, partial
+            sequence.
+ACCESSION   AB012345
+VERSION     AB012345.1
+DBLINK      BioProject: PRJNA12345
+KEYWORDS    16S rRNA.
+SOURCE      Escherichia coli
+  ORGANISM  Escherichia coli
+            Bacteria; Proteobacteria; Gammaproteobacteria; Enterobacterales;
+            Enterobacteriaceae; Escherichia.
+REFERENCE   1  (bases 1 to 2400)
+  AUTHORS   Smith,J. and Doe,A.
+  TITLE     Some Paper Title
+  JOURNAL   J. Bacteriol. 200 (1), 1-10 (2020)
+   PUBMED   12345678
+COMMENT     This is a comment that spans
+            multiple lines.
+FEATURES             Location/Qualifiers
+     source          1..2400
+                     /organism=\"Escherichia coli\"
+                     /mol_type=\"genomic DNA\"
+                     /strain=\"K-12\"
+     gene            1..2400
+                     /gene=\"16S rRNA\"
+     rRNA            1..2400
+                     /gene=\"16S rRNA\"
+                     /product=\"16S ribosomal RNA\"
+ORIGIN
+        1 acgtacgtac gtacgtacgt
+       21 ttttggggaa aacccctttt
+//
+";
+        assert_parser_parity(input);
+    }
+
+    #[test]
+    fn parity_multi_record() {
+        let input = b"\
+LOCUS       Linear1 4 bp DNA linear UNK
+DEFINITION  First linear record.
+ACCESSION   LIN001
+ORIGIN
+        1 aaaa
+//
+LOCUS       Circ1 4 bp DNA circular UNK
+DEFINITION  Second circular record.
+ACCESSION   CIR001
+ORIGIN
+        1 cccc
+//
+";
+        assert_parser_parity(input);
+    }
+
+    #[test]
+    fn parity_no_origin() {
+        let input = b"\
+LOCUS       NoOrig 0 bp DNA linear UNK
+DEFINITION  Record without ORIGIN section.
+//
+";
+        assert_parser_parity(input);
+    }
+
+    #[test]
+    fn parity_truncated_eof() {
+        // Record terminated by EOF instead of //
+        let input = b"\
+LOCUS       TruncEOF 4 bp DNA linear UNK
+DEFINITION  Truncated record.
+ACCESSION   TRUNC001
+ORIGIN
+        1 acgt
+";
+        assert_parser_parity(input);
+    }
+
+    #[test]
+    fn parity_missing_terminator() {
+        // Two consecutive LOCUS lines without // between them
+        let input = b"\
+LOCUS       First 4 bp DNA linear UNK
+ORIGIN
+        1 aaaa
+LOCUS       Second 4 bp DNA circular UNK
+ORIGIN
+        1 cccc
+//
+";
+        assert_parser_parity(input);
+    }
+
+    #[test]
+    fn parity_definition_continuation() {
+        // DEFINITION spanning 3+ continuation lines
+        let input = b"\
+LOCUS       DefCont 4 bp DNA linear UNK
+DEFINITION  This is a very long definition that spans
+            multiple continuation lines in the GenBank
+            format, which is quite common for detailed
+            sequence descriptions.
+ACCESSION   DEF001
+ORIGIN
+        1 acgt
+//
+";
+        assert_parser_parity(input);
+    }
+
+    #[test]
+    fn parity_empty_input() {
+        assert_parser_parity(b"");
+    }
+
+    #[test]
+    fn parity_minimal_record() {
+        // Just LOCUS + ORIGIN + //
+        let input = b"\
+LOCUS       MinRec 4 bp DNA linear UNK
+ORIGIN
+        1 acgt
+//
+";
+        assert_parser_parity(input);
+    }
+
+    #[test]
+    fn parity_features_between_header_and_origin() {
+        // FEATURES section with gene/CDS annotations between ACCESSION and ORIGIN
+        let input = b"\
+LOCUS       FeatRec 8 bp DNA linear UNK
+DEFINITION  Record with features.
+ACCESSION   FEAT001
+FEATURES             Location/Qualifiers
+     gene            1..8
+                     /gene=\"testGene\"
+     CDS             1..6
+                     /product=\"hypothetical protein\"
+                     /translation=\"MK\"
+ORIGIN
+        1 acgtacgt
+//
+";
+        assert_parser_parity(input);
+    }
+
+    #[test]
+    fn parity_accession_before_definition() {
+        // Non-standard field order
+        let input = b"\
+LOCUS       RevOrder 4 bp DNA linear UNK
+ACCESSION   REV001
+DEFINITION  Definition after accession.
+ORIGIN
+        1 acgt
+//
+";
+        assert_parser_parity(input);
+    }
 }
