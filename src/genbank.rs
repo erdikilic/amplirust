@@ -114,7 +114,9 @@ impl<B: BufRead> GenbankReader<B> {
         };
 
         // Parse LOCUS line
-        parse_locus_line(&self.line_buf, &mut record);
+        let (name, is_circular) = parse_locus_fields(self.line_buf.as_bytes());
+        record.name = name;
+        record.is_circular = is_circular;
 
         // Read subsequent lines until record terminator
         loop {
@@ -153,7 +155,7 @@ impl<B: BufRead> GenbankReader<B> {
                         break;
                     }
                     check_line_length(&self.line_buf)?;
-                    if !self.line_buf.starts_with(' ') || is_keyword(&self.line_buf) {
+                    if !self.line_buf.starts_with(' ') || is_keyword_bytes(self.line_buf.as_bytes()) {
                         // Not a continuation — this line belongs to the next field
                         break;
                     }
@@ -222,45 +224,32 @@ impl<B: BufRead> GenbankReader<B> {
     }
 }
 
-/// Parse the LOCUS line to extract name and topology.
+/// Extract name and circularity from a LOCUS line (byte slice).
 ///
 /// Format: `LOCUS       name           len bp    mol  topology division`
 /// The name field starts at column 12 and extends to the first whitespace.
 /// Topology is either "circular" or "linear" somewhere on the line.
-fn parse_locus_line(line: &str, record: &mut GenbankRecord) {
-    // Extract name: starts at column 12, ends at next whitespace
-    if let Some(name) = line
-        .get(12..)
-        .and_then(|r| r.split_whitespace().next())
-        .filter(|n| !n.is_empty())
-    {
-        record.name = Some(name.to_string());
-    }
-
-    // Check for circular topology (case-insensitive)
-    let lower = line.to_ascii_lowercase();
-    record.is_circular = lower.contains("circular");
-}
-
-/// Check if a line starts with a known `GenBank` top-level keyword.
-/// Used to detect the end of continuation lines.
-fn is_keyword(line: &str) -> bool {
-    const KEYWORDS: &[&str] = &[
-        "LOCUS",
-        "DEFINITION",
-        "ACCESSION",
-        "VERSION",
-        "DBLINK",
-        "KEYWORDS",
-        "SOURCE",
-        "REFERENCE",
-        "COMMENT",
-        "FEATURES",
-        "BASE COUNT",
-        "ORIGIN",
-        "CONTIG",
-    ];
-    KEYWORDS.iter().any(|kw| line.starts_with(kw))
+///
+/// Used by both the streaming and slice-based parser paths.
+fn parse_locus_fields(line: &[u8]) -> (Option<String>, bool) {
+    let name = if line.len() > 12 {
+        let rest = &line[12..];
+        let name_end = rest
+            .iter()
+            .position(|&b| b == b' ' || b == b'\t')
+            .unwrap_or(rest.len());
+        if name_end > 0 {
+            Some(String::from_utf8_lossy(&rest[..name_end]).into_owned())
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let is_circular = line
+        .windows(8)
+        .any(|w| w.eq_ignore_ascii_case(b"circular"));
+    (name, is_circular)
 }
 
 /// Read sequence data from ORIGIN section until `//`, `LOCUS`, or EOF.
@@ -362,7 +351,9 @@ fn parse_single_record_slice(data: &[u8], origin_finder: &memmem::FinderRev) -> 
     // Find the end of the LOCUS line.
     let locus_end = memchr::memchr(b'\n', data).unwrap_or(data.len());
     let locus_line = &data[..locus_end];
-    parse_locus_line_bytes(locus_line, &mut record);
+    let (name, is_circular) = parse_locus_fields(locus_line);
+    record.name = name;
+    record.is_circular = is_circular;
 
     // Use rfind to locate ORIGIN from the end of the record — this skips over
     // FEATURES (typically the largest section) instead of scanning through it.
@@ -411,25 +402,6 @@ fn find_header_end(data: &[u8], after_locus: usize, origin_pos: Option<usize>) -
         }
     }
     limit
-}
-
-/// Parse the LOCUS line from raw bytes.
-fn parse_locus_line_bytes(line: &[u8], record: &mut GenbankRecord) {
-    // Name starts at column 12.
-    if line.len() > 12 {
-        let rest = &line[12..];
-        // Find end of name (next whitespace).
-        let name_end = rest
-            .iter()
-            .position(|&b| b == b' ' || b == b'\t')
-            .unwrap_or(rest.len());
-        if name_end > 0 {
-            record.name = Some(String::from_utf8_lossy(&rest[..name_end]).into_owned());
-        }
-    }
-
-    // Case-insensitive circular check using byte windows.
-    record.is_circular = line.windows(8).any(|w| w.eq_ignore_ascii_case(b"circular"));
 }
 
 /// Parse DEFINITION and ACCESSION from the header portion (bytes between LOCUS and FEATURES/ORIGIN).
