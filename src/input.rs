@@ -1,3 +1,8 @@
+//! Sequence input handling: format detection, gzip decompression, and file expansion.
+//!
+//! Supports FASTA and GenBank formats, with automatic gzip/BGZF detection.
+//! Provides both batch (in-memory) and streaming parsers.
+
 use anyhow::{Context, Result, bail};
 use flate2::read::MultiGzDecoder;
 use gzp::deflate::Bgzf;
@@ -31,7 +36,9 @@ pub struct SequenceRecord {
 /// Supported input file formats
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum InputFormat {
+    /// FASTA format (plain or gzipped), detected by `.fa`, `.fasta`, `.fna`, etc.
     Fasta,
+    /// `GenBank` flat-file format, detected by `.gb`, `.gbk`, `.genbank`, etc.
     Genbank,
 }
 

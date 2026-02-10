@@ -1,3 +1,8 @@
+//! Output formatting for FASTA sequences and TSV statistics tables.
+//!
+//! Provides streaming FASTA writers (plain and gzip-compressed) and
+//! tab-separated summary output with per-product alignment details.
+
 use anyhow::{Context, Result};
 use gzp::{ZBuilder, deflate::Bgzf};
 use sassy::Strand;
@@ -13,7 +18,9 @@ const FASTA_LINE_WIDTH: usize = 80;
 
 /// Streaming FASTA writer (plain or gzipped)
 pub enum FastaWriter {
+    /// Uncompressed output through a buffered file writer.
     Plain(BufWriter<File>),
+    /// Multi-threaded BGZF-compressed output via gzp.
     Gzip(Box<dyn gzp::ZWriter<File>>),
 }
 
@@ -278,13 +285,18 @@ fn write_tsv_record<W: Write>(writer: &mut W, product: &PcrProduct) -> Result<()
     Ok(())
 }
 
-/// Summary statistics for a run
+/// Summary statistics for a completed PCR analysis run.
 #[derive(Debug, Default)]
 pub struct RunSummary {
+    /// Number of input sequences (FASTA records or `GenBank` entries) processed.
     pub total_sequences: usize,
+    /// Number of primer pairs used in the search.
     pub total_primers: usize,
+    /// Total PCR products found across all sequences and primers.
     pub total_products: usize,
+    /// Product count grouped by primer pair name.
     pub products_per_primer: Vec<(String, usize)>,
+    /// Product count grouped by reference sequence header.
     pub products_per_reference: Vec<(String, usize)>,
 }
 

@@ -10,11 +10,11 @@
 //!
 //! | Target                  | Iterations  | Corpus | Crashes |
 //! |-------------------------|-------------|--------|---------|
-//! | fuzz_genbank_streaming  | 24,806,303  | 1,047  | 0       |
-//! | fuzz_genbank_slice      | 29,410,773  | 1,076  | 0       |
-//! | fuzz_fasta              | 85,768,796  | 192    | 0       |
-//! | fuzz_primer_csv         | 2,965,500   | 789    | 0       |
-//! | fuzz_primer_matcher     | 7,308,723   | 491    | 0       |
+//! | `fuzz_genbank_streaming` | 24,806,303  | 1,047  | 0       |
+//! | `fuzz_genbank_slice`     | 29,410,773  | 1,076  | 0       |
+//! | `fuzz_fasta`             | 85,768,796  | 192    | 0       |
+//! | `fuzz_primer_csv`        | 2,965,500   | 789    | 0       |
+//! | `fuzz_primer_matcher`    | 7,308,723   | 491    | 0       |
 //!
 //! Total: ~150 million iterations, zero crashes.
 //!

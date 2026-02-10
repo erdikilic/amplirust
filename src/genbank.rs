@@ -33,12 +33,17 @@ fn check_line_length(line: &str) -> Result<()> {
     Ok(())
 }
 
-/// A parsed `GenBank` record containing only the fields we need.
+/// A parsed `GenBank` record containing only the fields needed for PCR analysis.
 pub struct GenbankRecord {
+    /// LOCUS name (first token of the LOCUS line), used as the sequence identifier.
     pub name: Option<String>,
+    /// Primary accession number from the ACCESSION line.
     pub accession: Option<String>,
+    /// Full organism/molecule description from the DEFINITION line(s).
     pub definition: Option<String>,
+    /// Whether the LOCUS line indicates circular topology.
     pub is_circular: bool,
+    /// Raw nucleotide sequence bytes extracted from the ORIGIN section.
     pub seq: Vec<u8>,
 }
 

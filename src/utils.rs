@@ -1,3 +1,8 @@
+//! DNA sequence utilities: complement, reverse complement, and circular genome helpers.
+//!
+//! Provides IUPAC-aware nucleotide complementation, circular sequence extension
+//! for wrap-around product detection, and coordinate mapping functions.
+
 /// DNA complement table (handles IUPAC codes)
 /// Index by ASCII value to get complement
 const COMPLEMENT_TABLE: [u8; 128] = {

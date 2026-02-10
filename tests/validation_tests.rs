@@ -12,7 +12,7 @@
 //! For full external validation against the real E. coli K-12 MG1655 genome
 //! (7 copies of 16S rRNA), run the companion script:
 //!
-//!   bash scripts/validate_ispcr.sh
+//!   bash `scripts/validate_ispcr.sh`
 //!
 //! That script downloads the E. coli genome, runs both amplirust and isPCR, and
 //! compares product counts, positions, and lengths.
@@ -64,15 +64,15 @@ fn filler_dna(len: usize) -> Vec<u8> {
 ///
 /// Wait -- let's think about this carefully. The amplicon length from 27F to 1492R
 /// is typically ~1465bp. But that includes the primers. So:
-///   amplicon = fwd_len(20) + interior + rc_rev_len(22) = 20 + interior + 22
+///   amplicon = `fwd_len`(20) + interior + `rc_rev_len`(22) = 20 + interior + 22
 ///   For interior = 1423bp: amplicon = 1465bp
 ///
 /// Actually amplirust measures the product as the full span from the start of
 /// the forward primer match to the end of the RC(reverse) match on the + strand.
-/// So expected_start = 100, expected_end = 100 + 20 + 1423 + 22 = 1565.
+/// So `expected_start` = 100, `expected_end` = 100 + 20 + 1423 + 22 = 1565.
 ///
-/// Let me recalculate: product length = fwd(20) + interior(1423) + rc_rev(22) = 1465bp.
-/// expected_start = 100, expected_end = 100 + 1465 = 1565.
+/// Let me recalculate: product length = fwd(20) + interior(1423) + `rc_rev`(22) = 1465bp.
+/// `expected_start` = 100, `expected_end` = 100 + 1465 = 1565.
 fn build_16s_validation_reference() -> (SequenceRecord, usize, usize, usize) {
     let rc_rev = reverse_complement(REV_1492R);
     // rc_rev = AAGTCGTAACAAGGTAACCGTA (22bp)
@@ -263,8 +263,8 @@ fn validation_16s_product_sequence_boundaries() {
 /// reference, matching the expected behavior for E. coli K-12 (7 copies).
 /// This test uses 2 copies for simplicity while proving multi-hit detection.
 ///
-/// Uses max_len=2000 to avoid cross-copy matches (fwd from copy 1 pairing
-/// with rc_rev from copy 2 when both are within the max product length).
+/// Uses `max_len`=2000 to avoid cross-copy matches (fwd from copy 1 pairing
+/// with `rc_rev` from copy 2 when both are within the max product length).
 #[test]
 fn validation_16s_multi_copy_detection() {
     let (record, expected_positions) = build_multi_copy_reference();
@@ -327,7 +327,7 @@ fn validation_16s_multi_copy_detection() {
     }
 }
 
-/// Validates that trim_primers mode correctly removes primer sequences,
+/// Validates that `trim_primers` mode correctly removes primer sequences,
 /// producing only the interior region (consistent with isPCR -out=fa behavior
 /// when trimming is requested).
 #[test]

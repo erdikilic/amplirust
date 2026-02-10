@@ -1,3 +1,9 @@
+//! In-silico PCR product detection.
+//!
+//! Finds PCR products by matching forward and reverse primers against sequences,
+//! with support for circular genomes, reverse-complement strand search,
+//! product length filtering, and N-base fraction limits.
+
 use crate::input::SequenceRecord;
 use crate::matcher::{MatchConfig, PrimerMatch, PrimerMatcher};
 use crate::primer::PrimerPair;
@@ -423,6 +429,10 @@ fn assign_case_numbers_by_reference(products: &mut [PcrProduct]) {
     }
 }
 
+/// Returns the canonical form of a DNA sequence for deduplication.
+///
+/// Picks the lexicographically smaller of the sequence and its reverse complement,
+/// so that a sequence and its RC map to the same canonical representative.
 #[must_use]
 pub fn canonical_sequence(sequence: &[u8]) -> Vec<u8> {
     let rc = reverse_complement(sequence);

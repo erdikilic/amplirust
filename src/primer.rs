@@ -1,3 +1,8 @@
+//! Primer pair parsing and validation.
+//!
+//! Reads primer pairs from CSV files or inline colon-separated strings,
+//! validates IUPAC nucleotide characters, and warns about unusual lengths.
+
 use anyhow::{Context, Result, bail};
 use std::path::Path;
 

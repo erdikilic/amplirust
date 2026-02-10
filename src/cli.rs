@@ -1,3 +1,7 @@
+//! Command-line argument parsing for amplirust.
+//!
+//! Uses clap derive macros for argument definition and validation.
+
 use clap::Parser;
 use std::path::PathBuf;
 

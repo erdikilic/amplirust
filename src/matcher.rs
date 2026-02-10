@@ -1,3 +1,8 @@
+//! Approximate primer matching using IUPAC-aware edit distance.
+//!
+//! Wraps the `sassy` library to provide primer-specific matching with
+//! identity filtering and optional reverse-complement search.
+
 use crate::utils::calculate_identity;
 use sassy::{Match, Searcher, Strand, profiles::Iupac};
 
