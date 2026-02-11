@@ -103,11 +103,12 @@ amplirust -i "data/*" -p primers.csv -o products.fasta
 
 #### Input Options
 
-| Option | Description |
-|--------|-------------|
-| `-i, --input <FILES>` | Input sequence files (comma-separated, glob patterns supported). Supports FASTA (`.fasta`, `.fa`, `.fna`, `.ffn`, `.fas`) and GenBank (`.gb`, `.gbk`, `.gbff`, `.genbank`, `.gbf`), including gzip-compressed (`.gz`). Unrecognized file types in glob results are skipped with a warning. |
-| `-p, --primers <PRIMERS>` | Primers as `name:forward:reverse` or path to CSV file |
-| `--circular` | Treat sequences as circular genomes |
+| Option | Default | Description |
+|--------|---------|-------------|
+| `-i, --input <FILES>` | | Input sequence files (comma-separated, glob patterns supported). Supports FASTA (`.fasta`, `.fa`, `.fna`, `.ffn`, `.fas`) and GenBank (`.gb`, `.gbk`, `.gbff`, `.genbank`, `.gbf`), including gzip-compressed (`.gz`). Unrecognized file types in glob results are skipped with a warning. |
+| `-p, --primers <PRIMERS>` | | Primers as `name:forward:reverse` or path to CSV file |
+| `--circular` | false | Treat sequences as circular genomes |
+| `--max-decompression-size <N>` | 4294967296 | Maximum decompressed file size in bytes (0 = unlimited) |
 
 #### Matching Options
 

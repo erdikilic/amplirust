@@ -18,14 +18,27 @@ cargo test
 
 ## Code Quality
 
-Before submitting changes, ensure your code passes formatting and linting checks:
+CI enforces a quality gate on every push and pull request. Before submitting changes, ensure your code passes all checks locally:
 
 ```bash
 # Format code
-cargo fmt
+cargo fmt --all
 
-# Run linter
-cargo clippy
+# Run linter (pedantic lints are configured in Cargo.toml)
+cargo clippy --all-targets -- -D warnings
+
+# Audit dependencies for security vulnerabilities and license issues
+cargo deny check
+
+# Run tests with both parser backends
+cargo test
+cargo test --no-default-features --features parser_needletail
+```
+
+For performance-sensitive changes, run the Criterion benchmarks to check for regressions:
+
+```bash
+cargo bench
 ```
 
 ## Feature Flags
@@ -47,7 +60,7 @@ cargo test --no-default-features --features parser_needletail
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/my-change`)
 3. Make your changes and add tests
-4. Ensure `cargo fmt`, `cargo clippy`, and `cargo test` pass
+4. Ensure all CI checks pass: `cargo fmt --all`, `cargo clippy --all-targets -- -D warnings`, `cargo deny check`, and `cargo test` (with both parser features)
 5. Open a pull request against `main`
 
 ## License

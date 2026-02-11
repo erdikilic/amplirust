@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `--max-decompression-size` CLI option to set a safety limit against decompression bombs (default 4 GiB, 0 = unlimited)
+- Structured error handling with actionable messages for common issues (unwritable output, missing directories, decompression limits, CSV format errors)
+- 260 tests: unit, integration, property-based (proptest), snapshot (insta), fuzz regression, and validation
+- Criterion benchmarks for matching, parsing, pipeline, and circular genome operations
+- Complete public API documentation enforced by `missing_docs` lint
+- CI quality gate on every push and pull request (rustfmt, clippy pedantic, cargo-deny, coverage with Codecov)
+
+### Changed
+
+- Internal: extracted pipeline logic to `src/pipeline.rs`, unified GenBank parser, adaptive buffer sizing
+
 ## v0.2.0
 
 Current release.
