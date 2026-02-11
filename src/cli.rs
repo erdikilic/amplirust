@@ -149,4 +149,63 @@ mod tests {
         ]);
         assert_eq!(args.input.len(), 3);
     }
+
+    #[test]
+    fn test_effective_threads_auto() {
+        let args = Args::parse_from(["amplirust", "-i", "t.fa", "-p", "p:ACGT:TGCA"]);
+        assert_eq!(args.threads, 0);
+        assert!(args.effective_threads() > 0);
+    }
+
+    #[test]
+    fn test_effective_threads_explicit() {
+        let args = Args::parse_from(["amplirust", "-i", "t.fa", "-p", "p:ACGT:TGCA", "-t", "4"]);
+        assert_eq!(args.effective_threads(), 4);
+    }
+
+    #[test]
+    fn test_output_is_gzipped_true() {
+        let args = Args::parse_from([
+            "amplirust",
+            "-i",
+            "t.fa",
+            "-p",
+            "p:ACGT:TGCA",
+            "-o",
+            "out.fasta.gz",
+        ]);
+        assert!(args.output_is_gzipped());
+    }
+
+    #[test]
+    fn test_output_is_gzipped_false() {
+        let args = Args::parse_from([
+            "amplirust",
+            "-i",
+            "t.fa",
+            "-p",
+            "p:ACGT:TGCA",
+            "-o",
+            "out.fasta",
+        ]);
+        assert!(!args.output_is_gzipped());
+    }
+
+    #[test]
+    fn test_output_is_gzipped_no_output() {
+        let args = Args::parse_from(["amplirust", "-i", "t.fa", "-p", "p:ACGT:TGCA"]);
+        assert!(!args.output_is_gzipped());
+    }
+
+    #[test]
+    fn test_show_progress() {
+        let args = Args::parse_from(["amplirust", "-i", "t.fa", "-p", "p:ACGT:TGCA"]);
+        assert!(args.show_progress());
+
+        let quiet = Args::parse_from(["amplirust", "-i", "t.fa", "-p", "p:ACGT:TGCA", "-q"]);
+        assert!(!quiet.show_progress());
+
+        let verbose = Args::parse_from(["amplirust", "-i", "t.fa", "-p", "p:ACGT:TGCA", "-v"]);
+        assert!(!verbose.show_progress());
+    }
 }

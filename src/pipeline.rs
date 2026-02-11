@@ -546,4 +546,25 @@ mod tests {
         let result = compute_buffer_size(8, Some(50_000_000));
         assert!(result >= 128);
     }
+
+    #[test]
+    fn test_buffer_size_exact_boundary_1m() {
+        // Exactly 1_000_000 is NOT < 1_000_000, so falls to the medium tier (1M..100M)
+        let result = compute_buffer_size(4, Some(1_000_000));
+        assert!(result >= 128);
+    }
+
+    #[test]
+    fn test_buffer_size_exact_boundary_100m() {
+        // Exactly 100_000_000 is NOT < 100_000_000, so falls to the large tier
+        let result = compute_buffer_size(4, Some(100_000_000));
+        assert!(result >= 256);
+    }
+
+    #[test]
+    fn test_buffer_size_zero_threads() {
+        // 0 threads: saturating_mul(4) = 0, max(MIN) = 32
+        let result = compute_buffer_size(0, Some(500));
+        assert_eq!(result, MIN_BUFFER_SIZE);
+    }
 }

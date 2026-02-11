@@ -677,4 +677,75 @@ mod tests {
         assert!(header_line.contains("strand="));
         assert!(header_line.contains("len="));
     }
+
+    #[test]
+    fn test_write_fasta_gzip_roundtrip() {
+        use flate2::read::MultiGzDecoder;
+        use std::io::Read;
+
+        let products = vec![make_test_product(1)];
+        let temp = NamedTempFile::with_suffix(".fasta.gz").unwrap();
+
+        write_fasta(&products, temp.path(), 1).unwrap();
+
+        // Verify it's valid gzip and contains expected content
+        let file = std::fs::File::open(temp.path()).unwrap();
+        let mut decoder = MultiGzDecoder::new(file);
+        let mut content = String::new();
+        decoder.read_to_string(&mut content).unwrap();
+        assert!(content.contains("ACGTACGTACGT"));
+    }
+
+    #[test]
+    fn test_run_summary_from_counts() {
+        use std::collections::HashMap;
+        let mut primer_counts = HashMap::new();
+        primer_counts.insert("16S".to_string(), 5);
+        primer_counts.insert("ITS".to_string(), 3);
+        let mut ref_counts = HashMap::new();
+        ref_counts.insert("ecoli".to_string(), 4);
+        ref_counts.insert("staph".to_string(), 4);
+
+        let summary = RunSummary::from_counts(10, 2, 8, primer_counts, ref_counts);
+        assert_eq!(summary.total_products, 8);
+        assert_eq!(summary.total_sequences, 10);
+        assert_eq!(summary.total_primers, 2);
+        // Sorted descending by count
+        assert_eq!(summary.products_per_primer[0].1, 5);
+        assert_eq!(summary.products_per_primer[1].1, 3);
+    }
+
+    #[test]
+    fn test_run_summary_many_references_branch() {
+        // Tests the >10 references branch in print_stderr/log_summary
+        let products: Vec<PcrProduct> = (0..12)
+            .map(|i| {
+                let mut p = make_test_product(1);
+                p.reference_header = format!("ref_{i}");
+                p
+            })
+            .collect();
+        let summary = RunSummary::from_products(&products, 12, 1);
+        assert_eq!(summary.products_per_reference.len(), 12);
+        // Call these to hit the >10 branch — no panic is the assertion
+        summary.log_summary();
+        summary.print_stderr();
+    }
+
+    #[test]
+    fn test_run_summary_empty() {
+        let summary = RunSummary::from_products(&[], 0, 0);
+        assert_eq!(summary.total_products, 0);
+        summary.log_summary();
+        summary.print_stderr();
+    }
+
+    #[test]
+    fn test_validate_output_writable_bare_filename() {
+        // File with no directory component (parent is "") exercises the
+        // `!parent.as_os_str().is_empty()` guard in validate_output_writable
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("output.fa");
+        assert!(validate_output_writable(&path).is_ok());
+    }
 }

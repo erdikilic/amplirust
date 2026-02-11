@@ -62,3 +62,59 @@ pub enum ValidationError {
         limit: usize,
     },
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_output_not_writable_display() {
+        let err = ValidationError::OutputNotWritable {
+            path: PathBuf::from("/tmp/test.fa"),
+            source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied"),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("/tmp/test.fa"));
+        assert!(msg.contains("not writable"));
+    }
+
+    #[test]
+    fn test_output_dir_missing_display() {
+        let err = ValidationError::OutputDirMissing {
+            path: PathBuf::from("/nonexistent/dir"),
+        };
+        assert!(err.to_string().contains("does not exist"));
+    }
+
+    #[test]
+    fn test_decompression_limit_display() {
+        let err = ValidationError::DecompressionLimitExceeded {
+            path: PathBuf::from("big.fa.gz"),
+            limit: 1024,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("big.fa.gz"));
+        assert!(msg.contains("1024"));
+    }
+
+    #[test]
+    fn test_csv_format_display() {
+        let err = ValidationError::CsvFormat {
+            path: PathBuf::from("primers.csv"),
+            detail: "missing columns".to_string(),
+        };
+        assert!(err.to_string().contains("missing columns"));
+    }
+
+    #[test]
+    fn test_line_too_long_display() {
+        let err = ValidationError::LineTooLong {
+            path: PathBuf::from("huge.fa"),
+            len: 999_999,
+            limit: 500_000,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("999999"));
+        assert!(msg.contains("500000"));
+    }
+}

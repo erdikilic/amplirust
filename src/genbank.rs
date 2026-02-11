@@ -1403,4 +1403,62 @@ ORIGIN
 ";
         assert_parser_parity(input);
     }
+
+    #[test]
+    fn test_definition_then_locus_no_terminator() {
+        // DEFINITION continuation stops at LOCUS (no ORIGIN, no //)
+        // This exercises the `has_pending_locus` branch after DEFINITION parsing
+        let gb = "\
+LOCUS       First 0 bp DNA linear UNK
+DEFINITION  First record definition.
+LOCUS       Second 4 bp DNA linear UNK
+ORIGIN
+        1 acgt
+//
+";
+        let records = parse_all(gb);
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].name.as_deref(), Some("First"));
+        assert_eq!(
+            records[0].definition.as_deref(),
+            Some("First record definition.")
+        );
+        assert!(records[0].seq.is_empty());
+        assert_eq!(records[1].name.as_deref(), Some("Second"));
+        assert_eq!(records[1].seq, b"acgt");
+    }
+
+    #[test]
+    fn parity_definition_then_locus_no_terminator() {
+        let input = b"\
+LOCUS       First 0 bp DNA linear UNK
+DEFINITION  First record definition.
+LOCUS       Second 4 bp DNA linear UNK
+ORIGIN
+        1 acgt
+//
+";
+        assert_parser_parity(input);
+    }
+
+    #[test]
+    fn test_definition_multiline_then_origin() {
+        // Multi-line DEFINITION followed directly by ORIGIN (no ACCESSION)
+        let gb = "\
+LOCUS       S1 4 bp DNA linear UNK
+DEFINITION  First line of definition
+            second line of definition
+            third line of definition.
+ORIGIN
+        1 acgt
+//
+";
+        let records = parse_all(gb);
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0].definition.as_deref(),
+            Some("First line of definition second line of definition third line of definition.")
+        );
+        assert_eq!(records[0].seq, b"acgt");
+    }
 }

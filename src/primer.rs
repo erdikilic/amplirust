@@ -302,4 +302,79 @@ mod tests {
         let result = parse_primers_from_string("invalid");
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_csv_too_few_header_columns() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut temp = NamedTempFile::with_suffix(".csv").unwrap();
+        writeln!(temp, "name,forward").unwrap();
+        writeln!(temp, "p1,ACGT").unwrap();
+        temp.flush().unwrap();
+
+        let result = parse_primers(temp.path().to_str().unwrap());
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("column"),
+            "Expected column count error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_csv_row_too_few_columns() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut temp = NamedTempFile::with_suffix(".csv").unwrap();
+        writeln!(temp, "name,forward,reverse").unwrap();
+        writeln!(temp, "p1,ACGT").unwrap(); // only 2 columns in data row
+        temp.flush().unwrap();
+
+        let result = parse_primers(temp.path().to_str().unwrap());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_csv_empty_fields() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut temp = NamedTempFile::with_suffix(".csv").unwrap();
+        writeln!(temp, "name,forward,reverse").unwrap();
+        writeln!(temp, "p1,,TGCA").unwrap(); // empty forward field
+        temp.flush().unwrap();
+
+        let result = parse_primers(temp.path().to_str().unwrap());
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("empty"),
+            "Expected empty fields error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_warn_primer_length_short() {
+        // Primers shorter than MIN_PRIMER_LEN (10) should not panic
+        let primer = PrimerPair::new("short", b"ACGT", b"TGCA").unwrap();
+        warn_primer_length(&primer); // no panic = pass
+    }
+
+    #[test]
+    fn test_warn_primer_length_long() {
+        // Primers longer than MAX_PRIMER_LEN (50) should not panic
+        let long_seq = b"ACGT".repeat(15); // 60bp
+        let primer = PrimerPair::new("long", &long_seq, &long_seq).unwrap();
+        warn_primer_length(&primer); // no panic = pass
+    }
+
+    #[test]
+    fn test_warn_primer_length_normal() {
+        // Primers within recommended range should not panic
+        let primer =
+            PrimerPair::new("normal", b"ACGTACGTACGTACGTACGT", b"TGCATGCATGCATGCATGCA").unwrap();
+        warn_primer_length(&primer); // no panic = pass
+    }
 }
