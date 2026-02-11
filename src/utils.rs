@@ -216,7 +216,12 @@ mod tests {
         for seq in sequences {
             let rc = reverse_complement(seq);
             let rc_rc = reverse_complement(&rc);
-            assert_eq!(&rc_rc, *seq, "RC involution failed for {:?}", String::from_utf8_lossy(seq));
+            assert_eq!(
+                &rc_rc,
+                *seq,
+                "RC involution failed for {:?}",
+                String::from_utf8_lossy(seq)
+            );
         }
     }
 
@@ -422,8 +427,12 @@ mod tests {
         for seq in sequences {
             let mut output = Vec::new();
             reverse_complement_into(seq, &mut output);
-            assert_eq!(output, reverse_complement(seq),
-                "reverse_complement_into disagrees for {:?}", String::from_utf8_lossy(seq));
+            assert_eq!(
+                output,
+                reverse_complement(seq),
+                "reverse_complement_into disagrees for {:?}",
+                String::from_utf8_lossy(seq)
+            );
         }
     }
 

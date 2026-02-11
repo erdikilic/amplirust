@@ -1100,12 +1100,20 @@ mod tests {
             sequence: vec![],
             full_length: 0,
             fwd_match: PrimerMatch {
-                start: 0, end: 0, edit_distance: 0,
-                strand: Strand::Fwd, cigar: String::new(), identity: 1.0,
+                start: 0,
+                end: 0,
+                edit_distance: 0,
+                strand: Strand::Fwd,
+                cigar: String::new(),
+                identity: 1.0,
             },
             rev_match: PrimerMatch {
-                start: 0, end: 0, edit_distance: 0,
-                strand: Strand::Fwd, cigar: String::new(), identity: 1.0,
+                start: 0,
+                end: 0,
+                edit_distance: 0,
+                strand: Strand::Fwd,
+                cigar: String::new(),
+                identity: 1.0,
             },
             strand: Strand::Fwd,
             is_circular_wrap: false,
@@ -1121,7 +1129,10 @@ mod tests {
             full_length: 4,
             ..product
         };
-        assert!(!product2.is_empty(), "non-empty sequence should not be empty");
+        assert!(
+            !product2.is_empty(),
+            "non-empty sequence should not be empty"
+        );
         assert_eq!(product2.len(), 4);
     }
 
@@ -1170,12 +1181,20 @@ mod tests {
             sequence: b"ACGT".to_vec(),
             full_length: 4,
             fwd_match: PrimerMatch {
-                start: 0, end: 4, edit_distance: 0,
-                strand: Strand::Fwd, cigar: "4=".to_string(), identity: 1.0,
+                start: 0,
+                end: 4,
+                edit_distance: 0,
+                strand: Strand::Fwd,
+                cigar: "4=".to_string(),
+                identity: 1.0,
             },
             rev_match: PrimerMatch {
-                start: 10, end: 14, edit_distance: 0,
-                strand: Strand::Fwd, cigar: "4=".to_string(), identity: 1.0,
+                start: 10,
+                end: 14,
+                edit_distance: 0,
+                strand: Strand::Fwd,
+                cigar: "4=".to_string(),
+                identity: 1.0,
             },
             strand: Strand::Fwd,
             is_circular_wrap: false,
@@ -1222,7 +1241,10 @@ mod tests {
         };
 
         let products = find_pcr_products(&record, &primer, &config);
-        assert!(!products.is_empty(), "Product exactly at min_len should be included");
+        assert!(
+            !products.is_empty(),
+            "Product exactly at min_len should be included"
+        );
         for p in &products {
             assert!(p.full_length >= config.min_len);
             assert!(p.full_length <= config.max_len);
@@ -1250,7 +1272,10 @@ mod tests {
         };
 
         let products = find_pcr_products(&record, &primer, &config);
-        assert!(products.is_empty(), "Products below min_len should be excluded");
+        assert!(
+            products.is_empty(),
+            "Products below min_len should be excluded"
+        );
     }
 
     #[test]
@@ -1258,8 +1283,7 @@ mod tests {
         // Use non-palindromic primers with non-IUPAC-ambiguous internal sequence.
         // Forward: AAGC, Reverse: TTCA (RC of TTCA = TGAA)
         // Internal sequence uses only A/T to avoid matching primers.
-        let record = make_record("test",
-            b"CCCCAAGCATATATATATATATATATTGAACCCC");
+        let record = make_record("test", b"CCCCAAGCATATATATATATATATATTGAACCCC");
         // positions: 4..8=AAGC, 29..33=TGAA (RC of TTCA)
         let primer = PrimerPair::new("test", b"AAGC", b"TTCA").unwrap();
 
@@ -1277,7 +1301,10 @@ mod tests {
             max_n_fraction: 1.0,
         };
         let products_ok = find_pcr_products(&record, &primer, &config_ok);
-        assert!(!products_ok.is_empty(), "Sanity: should find product with large max_len");
+        assert!(
+            !products_ok.is_empty(),
+            "Sanity: should find product with large max_len"
+        );
         let actual_len = products_ok[0].full_length;
         assert!(actual_len > 8, "Product should be nontrivial length");
 
@@ -1287,6 +1314,9 @@ mod tests {
             ..config_ok.clone()
         };
         let products_tight = find_pcr_products(&record, &primer, &config_tight);
-        assert!(products_tight.is_empty(), "Products above max_len should be excluded");
+        assert!(
+            products_tight.is_empty(),
+            "Products above max_len should be excluded"
+        );
     }
 }

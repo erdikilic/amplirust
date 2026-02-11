@@ -6,11 +6,11 @@
 
 use std::path::{Path, PathBuf};
 
-use amplirust::input::{read_sequences_from_file, SequenceRecord};
+use amplirust::input::{SequenceRecord, read_sequences_from_file};
 use amplirust::matcher::MatchConfig;
 use amplirust::output::validate_output_writable;
-use amplirust::pcr::{find_pcr_products, PcrConfig};
-use amplirust::primer::{parse_primers, PrimerPair};
+use amplirust::pcr::{PcrConfig, find_pcr_products};
+use amplirust::primer::{PrimerPair, parse_primers};
 use amplirust::utils::reverse_complement;
 
 fn test_data_path(filename: &str) -> PathBuf {
@@ -36,7 +36,9 @@ fn test_malformed_fasta_no_panic() {
         // seq_io returns zero records for headerless FASTA (no '>' seen).
         assert!(
             records.is_empty()
-                || records.iter().all(|r| r.header.is_empty() || r.sequence.is_empty()),
+                || records
+                    .iter()
+                    .all(|r| r.header.is_empty() || r.sequence.is_empty()),
             "Malformed FASTA should produce no valid records, got {} record(s)",
             records.len()
         );
@@ -90,7 +92,10 @@ fn test_unwritable_output_returns_error() {
     // Path in a nonexistent directory.
     let result = validate_output_writable(Path::new("/proc/nonexistent/dir/output.fasta"));
 
-    assert!(result.is_err(), "Unwritable output path should return error");
+    assert!(
+        result.is_err(),
+        "Unwritable output path should return error"
+    );
 
     let err_msg = result.unwrap_err().to_string();
     assert!(
@@ -130,8 +135,8 @@ fn test_empty_sequence_no_panic() {
         source_file: PathBuf::from("test.fasta"),
     };
 
-    let primer = PrimerPair::new("test", b"ACGTACGT", b"TGCATGCA")
-        .expect("Valid primer should construct");
+    let primer =
+        PrimerPair::new("test", b"ACGTACGT", b"TGCATGCA").expect("Valid primer should construct");
 
     let config = PcrConfig {
         match_config: MatchConfig {
@@ -201,8 +206,8 @@ fn build_identity_test_sequence() -> (Vec<u8>, PrimerPair) {
 
     assert_eq!(seq.len(), 200, "Test sequence should be 200bp");
 
-    let primer = PrimerPair::new("identity_test", fwd_primer, rev_primer)
-        .expect("Valid primer pair");
+    let primer =
+        PrimerPair::new("identity_test", fwd_primer, rev_primer).expect("Valid primer pair");
     (seq, primer)
 }
 
@@ -286,9 +291,9 @@ fn test_identity_filter_exact_match_always_passes() {
     // Build sequence with exact forward and exact reverse RC
     let mut seq = Vec::with_capacity(120);
     seq.extend_from_slice(&[b'A'; 20]);
-    seq.extend_from_slice(fwd);          // 20bp forward at pos 20
+    seq.extend_from_slice(fwd); // 20bp forward at pos 20
     seq.extend_from_slice(&[b'T'; 40]); // filler
-    seq.extend_from_slice(&rev_rc);      // 20bp reverse RC at pos 80
+    seq.extend_from_slice(&rev_rc); // 20bp reverse RC at pos 80
     // Pad to at least 100bp
     while seq.len() < 120 {
         seq.push(b'A');
@@ -369,8 +374,18 @@ fn test_very_short_primer_3bp() {
 #[test]
 fn test_very_long_primer_60bp() {
     // Generate a deterministic 60bp primer from repeating pattern.
-    let fwd_60: Vec<u8> = b"ACGTACGTACGTACGTACGT".iter().cycle().take(60).copied().collect();
-    let rev_60: Vec<u8> = b"TGCATGCATGCATGCATGCA".iter().cycle().take(60).copied().collect();
+    let fwd_60: Vec<u8> = b"ACGTACGTACGTACGTACGT"
+        .iter()
+        .cycle()
+        .take(60)
+        .copied()
+        .collect();
+    let rev_60: Vec<u8> = b"TGCATGCATGCATGCATGCA"
+        .iter()
+        .cycle()
+        .take(60)
+        .copied()
+        .collect();
     let rev_60_rc = reverse_complement(&rev_60);
 
     let primer = PrimerPair::new("long60", &fwd_60, &rev_60).expect("60bp primer should be valid");
@@ -378,9 +393,9 @@ fn test_very_long_primer_60bp() {
     // Build sequence with the 60bp primers embedded
     let mut seq = Vec::with_capacity(300);
     seq.extend_from_slice(&[b'A'; 20]);
-    seq.extend_from_slice(&fwd_60);         // 60bp forward primer at pos 20
-    seq.extend_from_slice(&[b'T'; 100]);    // 100bp filler
-    seq.extend_from_slice(&rev_60_rc);      // 60bp reverse RC at pos 180
+    seq.extend_from_slice(&fwd_60); // 60bp forward primer at pos 20
+    seq.extend_from_slice(&[b'T'; 100]); // 100bp filler
+    seq.extend_from_slice(&rev_60_rc); // 60bp reverse RC at pos 180
     seq.extend_from_slice(&[b'A'; 20]);
 
     let record = SequenceRecord {

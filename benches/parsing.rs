@@ -1,6 +1,6 @@
 use std::hint::black_box;
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 
 use amplirust::genbank::parse_genbank_slice;
 use rand::rngs::StdRng;
@@ -10,7 +10,9 @@ use rand::{RngExt, SeedableRng};
 fn generate_dna(len: usize, seed: u64) -> Vec<u8> {
     let bases = b"ACGT";
     let mut rng = StdRng::seed_from_u64(seed);
-    (0..len).map(|_| bases[rng.random_range(0..4usize)]).collect()
+    (0..len)
+        .map(|_| bases[rng.random_range(0..4usize)])
+        .collect()
 }
 
 /// Generate synthetic `GenBank` data with `num_records` records, each with `seq_len` bp.

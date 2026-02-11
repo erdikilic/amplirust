@@ -13,10 +13,10 @@ use std::path::PathBuf;
 
 use tempfile::NamedTempFile;
 
-use amplirust::input::{read_sequences_from_file, SequenceRecord};
+use amplirust::input::{SequenceRecord, read_sequences_from_file};
 use amplirust::matcher::MatchConfig;
-use amplirust::pcr::{find_pcr_products, PcrConfig};
-use amplirust::primer::{parse_primers, PrimerPair};
+use amplirust::pcr::{PcrConfig, find_pcr_products};
+use amplirust::primer::{PrimerPair, parse_primers};
 use amplirust::utils::reverse_complement;
 use sassy::Strand;
 
@@ -42,9 +42,7 @@ fn genbank_record(name: &str, topology: &str, seq: &str) -> String {
 
     let bp = seq.len();
     let seq_lower = seq.to_lowercase();
-    let mut result = format!(
-        "LOCUS       {name:<16} {bp} bp    DNA     {topology}   UNK \n"
-    );
+    let mut result = format!("LOCUS       {name:<16} {bp} bp    DNA     {topology}   UNK \n");
     let _ = writeln!(result, "DEFINITION  {name} test sequence.");
     result.push_str("ORIGIN\n");
 
@@ -349,9 +347,7 @@ fn test_16s_amplicon_sequence_starts_with_forward_primer() {
          Expected end: {:?}\n\
          Actual end:   {:?}",
         String::from_utf8_lossy(&rc_rev),
-        String::from_utf8_lossy(
-            &product.sequence[product.sequence.len().saturating_sub(22)..]
-        ),
+        String::from_utf8_lossy(&product.sequence[product.sequence.len().saturating_sub(22)..]),
     );
 }
 
@@ -430,9 +426,7 @@ fn test_circular_wrap_product_sequence_content() {
          Expected: {:?}\n\
          Got:      {:?}",
         String::from_utf8_lossy(&fwd_primer),
-        String::from_utf8_lossy(
-            &product.sequence[..fwd_primer.len().min(product.sequence.len())]
-        ),
+        String::from_utf8_lossy(&product.sequence[..fwd_primer.len().min(product.sequence.len())]),
     );
 
     // The wrapping product sequence should end with RC(reverse)
@@ -634,7 +628,8 @@ fn test_rc_strand_product_sequence_is_rc_of_original_region() {
     let expected_sequence = reverse_complement(original_region);
 
     assert_eq!(
-        product.sequence, expected_sequence,
+        product.sequence,
+        expected_sequence,
         "RC product sequence should be RC of the original + strand region.\n\
          original_start={}, original_end={}\n\
          Product len: {}, Expected len: {}",

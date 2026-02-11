@@ -70,8 +70,10 @@ const MAX_PRIMER_LEN: usize = 50;
 /// recommended range (`MIN_PRIMER_LEN..=MAX_PRIMER_LEN`). This is advisory
 /// only -- bioinformatics convention: unusual inputs should not block execution.
 pub fn warn_primer_length(primer: &PrimerPair) {
-    for (direction, len) in [("forward", primer.forward_len()), ("reverse", primer.reverse_len())]
-    {
+    for (direction, len) in [
+        ("forward", primer.forward_len()),
+        ("reverse", primer.reverse_len()),
+    ] {
         if !(MIN_PRIMER_LEN..=MAX_PRIMER_LEN).contains(&len) {
             log::warn!(
                 "Primer '{}' {} arm has unusual length ({} bp); recommended range is {}-{} bp",

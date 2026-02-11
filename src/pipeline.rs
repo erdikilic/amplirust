@@ -12,7 +12,9 @@ use std::sync::mpsc::sync_channel;
 use crate::cli::Args;
 use crate::input::{expand_input_patterns, read_sequences_from_file, streaming_reader};
 use crate::matcher::MatchConfig;
-use crate::output::{FastaWriter, RunSummary, TsvWriter, validate_output_writable, write_fasta_record};
+use crate::output::{
+    FastaWriter, RunSummary, TsvWriter, validate_output_writable, write_fasta_record,
+};
 use crate::pcr::{PcrConfig, canonical_sequence, find_pcr_products};
 use crate::primer::{parse_primers, warn_primer_length};
 
@@ -116,12 +118,10 @@ pub fn run(args: &Args) -> Result<()> {
 
     // ── Validation gate: fail-fast before expensive processing ──
     if let Some(ref output_path) = args.output {
-        validate_output_writable(output_path)
-            .context("Output file path validation failed")?;
+        validate_output_writable(output_path).context("Output file path validation failed")?;
     }
     if let Some(ref tsv_path) = args.tsv {
-        validate_output_writable(tsv_path)
-            .context("TSV output path validation failed")?;
+        validate_output_writable(tsv_path).context("TSV output path validation failed")?;
     }
 
     for primer in &primers {
@@ -425,11 +425,8 @@ pub fn run(args: &Args) -> Result<()> {
             .map(|file| {
                 let tx = tx.clone();
                 log::debug!("Reading sequences from: {}", file.display());
-                let records =
-                    read_sequences_from_file(file, args.max_decompression_size)
-                        .with_context(|| {
-                            format!("Failed to read input file: {}", file.display())
-                        })?;
+                let records = read_sequences_from_file(file, args.max_decompression_size)
+                    .with_context(|| format!("Failed to read input file: {}", file.display()))?;
 
                 let mut products = Vec::new();
                 for record in &records {

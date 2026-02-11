@@ -1,7 +1,7 @@
 use std::hint::black_box;
 use std::path::PathBuf;
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 
 use amplirust::input::SequenceRecord;
 use amplirust::matcher::MatchConfig;
@@ -15,7 +15,9 @@ use rand::{RngExt, SeedableRng};
 fn generate_dna(len: usize, seed: u64) -> Vec<u8> {
     let bases = b"ACGT";
     let mut rng = StdRng::seed_from_u64(seed);
-    (0..len).map(|_| bases[rng.random_range(0..4usize)]).collect()
+    (0..len)
+        .map(|_| bases[rng.random_range(0..4usize)])
+        .collect()
 }
 
 /// Generate a sequence with forward and reverse primers planted at known positions.
@@ -72,19 +74,15 @@ fn bench_circular_vs_linear(c: &mut Criterion) {
             max_n_fraction: 1.0,
         };
 
-        group.bench_with_input(
-            BenchmarkId::new("linear", size),
-            &record,
-            |b, record| {
-                b.iter(|| {
-                    find_pcr_products(
-                        black_box(record),
-                        black_box(&primer),
-                        black_box(&linear_config),
-                    )
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("linear", size), &record, |b, record| {
+            b.iter(|| {
+                find_pcr_products(
+                    black_box(record),
+                    black_box(&primer),
+                    black_box(&linear_config),
+                )
+            });
+        });
 
         // Circular mode
         let circular_config = PcrConfig {
@@ -92,19 +90,15 @@ fn bench_circular_vs_linear(c: &mut Criterion) {
             ..linear_config.clone()
         };
 
-        group.bench_with_input(
-            BenchmarkId::new("circular", size),
-            &record,
-            |b, record| {
-                b.iter(|| {
-                    find_pcr_products(
-                        black_box(record),
-                        black_box(&primer),
-                        black_box(&circular_config),
-                    )
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("circular", size), &record, |b, record| {
+            b.iter(|| {
+                find_pcr_products(
+                    black_box(record),
+                    black_box(&primer),
+                    black_box(&circular_config),
+                )
+            });
+        });
     }
 
     group.finish();

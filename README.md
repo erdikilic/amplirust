@@ -1,6 +1,7 @@
 # Amplirust
 
 [![Documentation](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://erdikilic.github.io/amplirust/)
+[![codecov](https://codecov.io/gh/erdikilic/amplirust/branch/main/graph/badge.svg)](https://codecov.io/gh/erdikilic/amplirust)
 [![Conda Version](https://anaconda.org/bioconda/amplirust/badges/version.svg)](https://anaconda.org/bioconda/amplirust)
 [![Conda Downloads](https://anaconda.org/bioconda/amplirust/badges/downloads.svg)](https://anaconda.org/bioconda/amplirust)
 [![Conda Platforms](https://anaconda.org/bioconda/amplirust/badges/platforms.svg)](https://anaconda.org/bioconda/amplirust)

@@ -1,6 +1,6 @@
 use std::hint::black_box;
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 
 use amplirust::matcher::{MatchConfig, PrimerMatcher};
 use rand::rngs::StdRng;
@@ -10,7 +10,9 @@ use rand::{RngExt, SeedableRng};
 fn generate_dna(len: usize, seed: u64) -> Vec<u8> {
     let bases = b"ACGT";
     let mut rng = StdRng::seed_from_u64(seed);
-    (0..len).map(|_| bases[rng.random_range(0..4usize)]).collect()
+    (0..len)
+        .map(|_| bases[rng.random_range(0..4usize)])
+        .collect()
 }
 
 fn bench_primer_matching(c: &mut Criterion) {
@@ -33,14 +35,10 @@ fn bench_primer_matching(c: &mut Criterion) {
             search_rc: false,
         };
 
-        group.bench_with_input(
-            BenchmarkId::new("exact", size),
-            &size,
-            |b, _| {
-                let mut matcher = PrimerMatcher::new(exact_config.clone());
-                b.iter(|| matcher.find_matches(black_box(primer), black_box(&seq)));
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("exact", size), &size, |b, _| {
+            let mut matcher = PrimerMatcher::new(exact_config.clone());
+            b.iter(|| matcher.find_matches(black_box(primer), black_box(&seq)));
+        });
 
         // Approximate matching (up to 2 errors, 80% identity)
         let approx_config = MatchConfig {
@@ -49,14 +47,10 @@ fn bench_primer_matching(c: &mut Criterion) {
             search_rc: false,
         };
 
-        group.bench_with_input(
-            BenchmarkId::new("approx_2err", size),
-            &size,
-            |b, _| {
-                let mut matcher = PrimerMatcher::new(approx_config.clone());
-                b.iter(|| matcher.find_matches(black_box(primer), black_box(&seq)));
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("approx_2err", size), &size, |b, _| {
+            let mut matcher = PrimerMatcher::new(approx_config.clone());
+            b.iter(|| matcher.find_matches(black_box(primer), black_box(&seq)));
+        });
     }
 
     group.finish();

@@ -17,8 +17,8 @@ fn dna_sequence(len_range: std::ops::Range<usize>) -> impl Strategy<Value = Vec<
 fn iupac_sequence(len_range: std::ops::Range<usize>) -> impl Strategy<Value = Vec<u8>> {
     proptest::collection::vec(
         proptest::sample::select(vec![
-            b'A', b'C', b'G', b'T', b'R', b'Y', b'S', b'W', b'K', b'M', b'B', b'D', b'H',
-            b'V', b'N',
+            b'A', b'C', b'G', b'T', b'R', b'Y', b'S', b'W', b'K', b'M', b'B', b'D', b'H', b'V',
+            b'N',
         ]),
         len_range,
     )

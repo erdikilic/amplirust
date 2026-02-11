@@ -1,7 +1,7 @@
 use std::hint::black_box;
 use std::path::PathBuf;
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 
 use amplirust::input::SequenceRecord;
 use amplirust::matcher::MatchConfig;
@@ -15,7 +15,9 @@ use rand::{RngExt, SeedableRng};
 fn generate_dna(len: usize, seed: u64) -> Vec<u8> {
     let bases = b"ACGT";
     let mut rng = StdRng::seed_from_u64(seed);
-    (0..len).map(|_| bases[rng.random_range(0..4usize)]).collect()
+    (0..len)
+        .map(|_| bases[rng.random_range(0..4usize)])
+        .collect()
 }
 
 /// Generate a sequence with forward and reverse primers planted at known positions.

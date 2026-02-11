@@ -164,7 +164,8 @@ impl<B: BufRead> GenbankReader<B> {
                         break;
                     }
                     check_line_length(&self.line_buf)?;
-                    if !self.line_buf.starts_with(' ') || is_keyword_bytes(self.line_buf.as_bytes()) {
+                    if !self.line_buf.starts_with(' ') || is_keyword_bytes(self.line_buf.as_bytes())
+                    {
                         // Not a continuation — this line belongs to the next field
                         break;
                     }
@@ -255,9 +256,7 @@ fn parse_locus_fields(line: &[u8]) -> (Option<String>, bool) {
     } else {
         None
     };
-    let is_circular = line
-        .windows(8)
-        .any(|w| w.eq_ignore_ascii_case(b"circular"));
+    let is_circular = line.windows(8).any(|w| w.eq_ignore_ascii_case(b"circular"));
     (name, is_circular)
 }
 

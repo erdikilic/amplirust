@@ -24,7 +24,7 @@ use std::path::PathBuf;
 
 use amplirust::input::SequenceRecord;
 use amplirust::matcher::MatchConfig;
-use amplirust::pcr::{find_pcr_products, PcrConfig};
+use amplirust::pcr::{PcrConfig, find_pcr_products};
 use amplirust::primer::PrimerPair;
 use amplirust::utils::reverse_complement;
 use sassy::Strand;
@@ -158,11 +158,9 @@ fn build_multi_copy_reference() -> (SequenceRecord, Vec<(usize, usize)>) {
 /// verified against UCSC isPCR.
 #[test]
 fn validation_16s_single_copy_product_found() {
-    let (record, expected_start, expected_end, expected_len) =
-        build_16s_validation_reference();
+    let (record, expected_start, expected_end, expected_len) = build_16s_validation_reference();
 
-    let primer = PrimerPair::new("27F_1492R", FWD_27F, REV_1492R)
-        .expect("valid resolved primers");
+    let primer = PrimerPair::new("27F_1492R", FWD_27F, REV_1492R).expect("valid resolved primers");
 
     let config = PcrConfig {
         match_config: MatchConfig {
@@ -217,8 +215,7 @@ fn validation_16s_single_copy_product_found() {
 fn validation_16s_product_sequence_boundaries() {
     let (record, _, _, _) = build_16s_validation_reference();
 
-    let primer = PrimerPair::new("27F_1492R", FWD_27F, REV_1492R)
-        .expect("valid resolved primers");
+    let primer = PrimerPair::new("27F_1492R", FWD_27F, REV_1492R).expect("valid resolved primers");
 
     let config = PcrConfig {
         match_config: MatchConfig {
@@ -269,8 +266,7 @@ fn validation_16s_product_sequence_boundaries() {
 fn validation_16s_multi_copy_detection() {
     let (record, expected_positions) = build_multi_copy_reference();
 
-    let primer = PrimerPair::new("27F_1492R", FWD_27F, REV_1492R)
-        .expect("valid resolved primers");
+    let primer = PrimerPair::new("27F_1492R", FWD_27F, REV_1492R).expect("valid resolved primers");
 
     let config = PcrConfig {
         match_config: MatchConfig {
@@ -305,21 +301,24 @@ fn validation_16s_multi_copy_detection() {
         .enumerate()
     {
         assert_eq!(
-            product.original_start, *exp_start,
+            product.original_start,
+            *exp_start,
             "Copy {} start: expected {}, got {}",
             i + 1,
             exp_start,
             product.original_start
         );
         assert_eq!(
-            product.original_end, *exp_end,
+            product.original_end,
+            *exp_end,
             "Copy {} end: expected {}, got {}",
             i + 1,
             exp_end,
             product.original_end
         );
         assert_eq!(
-            product.full_length, 1465,
+            product.full_length,
+            1465,
             "Copy {} length: expected 1465bp, got {}bp",
             i + 1,
             product.full_length
@@ -334,8 +333,7 @@ fn validation_16s_multi_copy_detection() {
 fn validation_16s_trimmed_product_length() {
     let (record, _, _, _) = build_16s_validation_reference();
 
-    let primer = PrimerPair::new("27F_1492R", FWD_27F, REV_1492R)
-        .expect("valid resolved primers");
+    let primer = PrimerPair::new("27F_1492R", FWD_27F, REV_1492R).expect("valid resolved primers");
 
     let config = PcrConfig {
         match_config: MatchConfig {

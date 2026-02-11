@@ -173,9 +173,16 @@ fn fasta_long_sequence_wrapping() {
 
     // Verify line wrapping at 80 chars
     let lines: Vec<&str> = content.lines().collect();
-    assert!(lines.len() >= 3, "Should have header + at least 2 sequence lines");
+    assert!(
+        lines.len() >= 3,
+        "Should have header + at least 2 sequence lines"
+    );
     for line in &lines[1..] {
-        assert!(line.len() <= 80, "Sequence line should be max 80 chars, got {}", line.len());
+        assert!(
+            line.len() <= 80,
+            "Sequence line should be max 80 chars, got {}",
+            line.len()
+        );
     }
 
     assert_snapshot!("fasta_long_sequence", content);
@@ -212,7 +219,10 @@ fn tsv_multi_product() {
 
     // Should have header + 3 data rows
     let line_count = content.lines().count();
-    assert_eq!(line_count, 4, "Should have 1 header + 3 data rows, got {line_count}");
+    assert_eq!(
+        line_count, 4,
+        "Should have 1 header + 3 data rows, got {line_count}"
+    );
 
     // Each data row should have 19 columns
     for (i, line) in content.lines().enumerate() {

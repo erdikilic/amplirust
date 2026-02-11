@@ -330,7 +330,10 @@ mod tests {
             search_rc: true,
         };
         let matcher = PrimerMatcher::new(config);
-        assert!(matcher.searches_rc(), "searches_rc should return true when search_rc=true");
+        assert!(
+            matcher.searches_rc(),
+            "searches_rc should return true when search_rc=true"
+        );
     }
 
     #[test]
@@ -341,7 +344,10 @@ mod tests {
             search_rc: false,
         };
         let matcher = PrimerMatcher::new(config);
-        assert!(!matcher.searches_rc(), "searches_rc should return false when search_rc=false");
+        assert!(
+            !matcher.searches_rc(),
+            "searches_rc should return false when search_rc=false"
+        );
     }
 
     #[test]
@@ -365,7 +371,10 @@ mod tests {
         };
         let mut matcher = PrimerMatcher::new(config);
         let raw = matcher.find_matches_raw(b"", b"AAAACGTAAA");
-        assert!(raw.is_empty(), "find_matches_raw with empty primer should return empty");
+        assert!(
+            raw.is_empty(),
+            "find_matches_raw with empty primer should return empty"
+        );
     }
 
     #[test]
@@ -377,7 +386,10 @@ mod tests {
         };
         let mut matcher = PrimerMatcher::new(config);
         let raw = matcher.find_matches_raw(b"ACGT", b"");
-        assert!(raw.is_empty(), "find_matches_raw with empty sequence should return empty");
+        assert!(
+            raw.is_empty(),
+            "find_matches_raw with empty sequence should return empty"
+        );
     }
 
     #[test]
@@ -388,7 +400,11 @@ mod tests {
             search_rc: false,
         };
         let matches = find_forward_matches(b"ACGT", b"AAAACGTAAA", &config);
-        assert_eq!(matches.len(), 1, "find_forward_matches should find the match");
+        assert_eq!(
+            matches.len(),
+            1,
+            "find_forward_matches should find the match"
+        );
         assert_eq!(matches[0].start, 3);
         assert_eq!(matches[0].end, 7);
     }
@@ -401,7 +417,11 @@ mod tests {
             search_rc: false,
         };
         let matches = find_reverse_matches(b"ACGT", b"AAAACGTAAA", &config);
-        assert_eq!(matches.len(), 1, "find_reverse_matches should find the match");
+        assert_eq!(
+            matches.len(),
+            1,
+            "find_reverse_matches should find the match"
+        );
         assert_eq!(matches[0].start, 3);
     }
 
@@ -413,7 +433,10 @@ mod tests {
             search_rc: false,
         };
         let matches = find_forward_matches(b"TTTT", b"AAAACGTAAA", &config);
-        assert!(matches.is_empty(), "find_forward_matches should return empty for no match");
+        assert!(
+            matches.is_empty(),
+            "find_forward_matches should return empty for no match"
+        );
     }
 
     #[test]
@@ -424,6 +447,9 @@ mod tests {
             search_rc: false,
         };
         let matches = find_reverse_matches(b"TTTT", b"AAAACGTAAA", &config);
-        assert!(matches.is_empty(), "find_reverse_matches should return empty for no match");
+        assert!(
+            matches.is_empty(),
+            "find_reverse_matches should return empty for no match"
+        );
     }
 }
