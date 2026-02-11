@@ -35,10 +35,63 @@ cargo test
 cargo test --no-default-features --features parser_needletail
 ```
 
-For performance-sensitive changes, run the Criterion benchmarks to check for regressions:
+## Testing
+
+### Unit & integration tests
 
 ```bash
+cargo test
+cargo test --no-default-features --features parser_needletail
+```
+
+### Fuzz testing
+
+Requires a nightly toolchain and [cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz):
+
+```bash
+cargo install cargo-fuzz
+
+# Run a target (runs until stopped with Ctrl-C)
+cargo +nightly fuzz run fuzz_fasta
+
+# Available targets: fuzz_fasta, fuzz_genbank_streaming, fuzz_genbank_slice,
+#                    fuzz_primer_csv, fuzz_primer_matcher
+cargo +nightly fuzz list
+```
+
+### Mutation testing
+
+Requires [cargo-mutants](https://github.com/sourcefrog/cargo-mutants):
+
+```bash
+cargo install cargo-mutants
+
+cargo mutants
+```
+
+Configuration is in `.cargo/mutants.toml`.
+
+### Benchmarks
+
+Requires [Criterion](https://bheisler.github.io/criterion.rs/book/) (already a dev-dependency):
+
+```bash
+# Run all benchmarks
 cargo bench
+
+# Run a specific suite
+cargo bench --bench matching
+cargo bench --bench parsing
+cargo bench --bench pipeline
+cargo bench --bench circular
+```
+
+### Validation against UCSC isPCR
+
+The script `scripts/validate_ispcr.sh` compares amplirust output against the gold-standard UCSC isPCR tool. It requires `isPcr` on your PATH and downloads the E. coli K-12 genome:
+
+```bash
+bash scripts/validate_ispcr.sh
 ```
 
 ## Feature Flags
