@@ -15,8 +15,8 @@ use crate::matcher::MatchConfig;
 use crate::output::{
     FastaWriter, RunSummary, TsvWriter, validate_output_writable, write_fasta_record,
 };
-use crate::pcr::{PcrConfig, canonical_sequence, find_pcr_products};
-use crate::primer::{parse_primers, warn_primer_length};
+use crate::pcr::{PcrConfig, canonical_sequence, find_pcr_products, find_pool_products};
+use crate::primer::{parse_pool_primers, parse_primers, warn_pool_primer_length, warn_primer_length};
 
 /// Minimum streaming buffer size (sequences in flight).
 const MIN_BUFFER_SIZE: usize = 32;
@@ -100,21 +100,52 @@ pub fn run(args: &Args) -> Result<()> {
         .build_global()
         .context("Failed to initialize thread pool")?;
 
-    // Parse primers
+    // Parse primers (pool or pair mode)
     log::info!("Parsing primers...");
-    let primers = parse_primers(&args.primers).context("Failed to parse primers")?;
-    log::info!("Loaded {} primer pair(s)", primers.len());
 
-    for primer in &primers {
-        log::debug!(
-            "Primer '{}': fwd={} ({}bp), rev={} ({}bp)",
-            primer.name,
-            String::from_utf8_lossy(&primer.forward),
-            primer.forward_len(),
-            String::from_utf8_lossy(&primer.reverse),
-            primer.reverse_len()
-        );
-    }
+    let pool_mode = args.pool;
+    let pool_self_match = args.pool_self_match;
+
+    let pool_primers: Option<Arc<Vec<crate::primer::Primer>>> = if pool_mode {
+        let primers =
+            parse_pool_primers(&args.primers).context("Failed to parse pool primers")?;
+        log::info!("Loaded {} pool primer(s)", primers.len());
+        for primer in &primers {
+            log::debug!(
+                "Pool primer '{}': seq={} ({}bp)",
+                primer.name,
+                String::from_utf8_lossy(&primer.sequence),
+                primer.len()
+            );
+        }
+        for primer in &primers {
+            warn_pool_primer_length(primer);
+        }
+        Some(Arc::new(primers))
+    } else {
+        None
+    };
+
+    let pair_primers: Option<Arc<Vec<crate::primer::PrimerPair>>> = if pool_mode {
+        None
+    } else {
+        let primers = parse_primers(&args.primers).context("Failed to parse primers")?;
+        log::info!("Loaded {} primer pair(s)", primers.len());
+        for primer in &primers {
+            log::debug!(
+                "Primer '{}': fwd={} ({}bp), rev={} ({}bp)",
+                primer.name,
+                String::from_utf8_lossy(&primer.forward),
+                primer.forward_len(),
+                String::from_utf8_lossy(&primer.reverse),
+                primer.reverse_len()
+            );
+        }
+        for primer in &primers {
+            warn_primer_length(primer);
+        }
+        Some(Arc::new(primers))
+    };
 
     // ── Validation gate: fail-fast before expensive processing ──
     if let Some(ref output_path) = args.output {
@@ -122,10 +153,6 @@ pub fn run(args: &Args) -> Result<()> {
     }
     if let Some(ref tsv_path) = args.tsv {
         validate_output_writable(tsv_path).context("TSV output path validation failed")?;
-    }
-
-    for primer in &primers {
-        warn_primer_length(primer);
     }
 
     // Expand input file patterns
@@ -180,12 +207,15 @@ pub fn run(args: &Args) -> Result<()> {
     let completed = AtomicUsize::new(0);
     let (tx, rx) = sync_channel::<WorkerBatch>(threads * 2);
 
-    let primers = Arc::new(primers);
+    let total_primers = if let Some(ref p) = pool_primers {
+        p.len()
+    } else {
+        pair_primers.as_ref().map_or(0, |p| p.len())
+    };
     let pcr_config = Arc::new(pcr_config);
     let output_path = args.output.clone();
     let tsv_path = args.tsv.clone();
     let remove_duplicates = args.remove_duplicates;
-    let total_primers = primers.len();
     let consumer_threads = threads;
 
     let consumer_handle = std::thread::spawn(move || -> Result<RunOutcome> {
@@ -341,10 +371,12 @@ pub fn run(args: &Args) -> Result<()> {
             for _ in 0..threads {
                 let seq_rx = seq_rx.clone();
                 let worker_tx = worker_tx.clone();
-                let primers = Arc::clone(&primers);
                 let pcr_config = Arc::clone(&pcr_config);
                 let seq_pb = seq_pb.clone();
                 let processed_count = Arc::clone(&processed_count);
+
+                let pool_primers = pool_primers.clone();
+                let pair_primers = pair_primers.clone();
 
                 s.spawn(move |_| {
                     while let Ok(record) = seq_rx.recv() {
@@ -354,15 +386,23 @@ pub fn run(args: &Args) -> Result<()> {
                         }
 
                         let mut products = Vec::new();
-                        for primer in primers.iter() {
-                            products.extend(find_pcr_products(
+                        if let Some(ref pool) = pool_primers {
+                            products.extend(find_pool_products(
                                 &record,
-                                primer,
+                                pool,
                                 pcr_config.as_ref(),
+                                pool_self_match,
                             ));
+                        } else if let Some(ref pairs) = pair_primers {
+                            for primer in pairs.iter() {
+                                products.extend(find_pcr_products(
+                                    &record,
+                                    primer,
+                                    pcr_config.as_ref(),
+                                ));
+                            }
                         }
 
-                        // Send batch of 1 sequence's products (maintains streaming flow)
                         let _ = worker_tx.send(WorkerBatch {
                             products,
                             sequences: 1,
@@ -430,8 +470,21 @@ pub fn run(args: &Args) -> Result<()> {
 
                 let mut products = Vec::new();
                 for record in &records {
-                    for primer in primers.iter() {
-                        products.extend(find_pcr_products(record, primer, pcr_config.as_ref()));
+                    if let Some(ref pool) = pool_primers {
+                        products.extend(find_pool_products(
+                            record,
+                            pool,
+                            pcr_config.as_ref(),
+                            pool_self_match,
+                        ));
+                    } else if let Some(ref pairs) = pair_primers {
+                        for primer in pairs.iter() {
+                            products.extend(find_pcr_products(
+                                record,
+                                primer,
+                                pcr_config.as_ref(),
+                            ));
+                        }
                     }
                 }
 

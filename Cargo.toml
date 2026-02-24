@@ -11,7 +11,7 @@ parser_seqio = ["seq_io"]
 parser_needletail = ["needletail"]
 
 [dependencies]
-sassy = "0.1"                 # Approximate string matching with IUPAC
+sassy = "0.2"                 # Approximate string matching with IUPAC
 flate2 = "1.0"                # Gzip decompression (handles multi-member archives)
 gzp = { version = "2.0", default-features = false, features = ["deflate_default"] }  # Multi-threaded gzip compression/decompression
 clap = { version = "4", features = ["derive"] }

@@ -17,6 +17,7 @@ A high-performance in-silico PCR tool for primer matching and product extraction
 - **Reverse complement strand search** for comprehensive primer detection
 - **Multi-threaded processing** for parallel file reading, searching, and compression
 - **Gzip/BGZF support** for both input and output files (parallel decompression for BGZF)
+- **Primer pool mode** for all-vs-all multiplex primer screening
 - **Flexible primer input** via command line or CSV file
 
 ## Installation
@@ -92,6 +93,9 @@ amplirust -i genome.fasta -p primers.csv --search-rc -o products.fasta --tsv sta
 # Gzip compressed output
 amplirust -i genome.fasta.gz -p primers.csv -o products.fasta.gz
 
+# Pool mode: find products between any primer combination
+amplirust --pool -i genome.fasta -p "p1:AGAGTTTGATCMTGGCTCAG;p2:GWATTACCGCGGCKGCTG;p3:CCTACGGGNGGCWGCAG" -o products.fasta
+
 # GenBank input
 amplirust -i sequence.gbk -p "16S:AGAGTTTGATCMTGGCTCAG:TACGGYTACCTTGTTACGACTT" -o products.fasta
 
@@ -106,7 +110,7 @@ amplirust -i "data/*" -p primers.csv -o products.fasta
 | Option | Default | Description |
 |--------|---------|-------------|
 | `-i, --input <FILES>` | | Input sequence files (comma-separated, glob patterns supported). Supports FASTA (`.fasta`, `.fa`, `.fna`, `.ffn`, `.fas`) and GenBank (`.gb`, `.gbk`, `.gbff`, `.genbank`, `.gbf`), including gzip-compressed (`.gz`). Unrecognized file types in glob results are skipped with a warning. |
-| `-p, --primers <PRIMERS>` | | Primers as `name:forward:reverse` or path to CSV file |
+| `-p, --primers <PRIMERS>` | | Primers as `name:forward:reverse` or path to CSV file (with `--pool`: `name:sequence`) |
 | `--circular` | false | Treat sequences as circular genomes |
 | `--max-decompression-size <N>` | 4294967296 | Maximum decompressed file size in bytes (0 = unlimited) |
 
@@ -118,6 +122,13 @@ amplirust -i "data/*" -p primers.csv -o products.fasta
 | `--min-identity <FLOAT>` | 0 (disabled) | Minimum identity threshold (0.0-1.0) |
 | `--search-rc` | false | Also search reverse complement strand |
 | `-t, --threads <N>` | auto | Number of threads (0 = auto-detect) |
+
+#### Pool Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--pool` | false | Treat primers as a pool of individual primers (all-vs-all matching) |
+| `--pool-self-match` | false | In pool mode, allow the same primer to match as both forward and reverse |
 
 #### Product Options
 
@@ -192,6 +203,30 @@ Then use:
 ```bash
 -p primers.csv
 ```
+
+### Pool Mode
+
+With `--pool`, primers are individual sequences instead of forward/reverse pairs.
+
+Single primer:
+```bash
+--pool -p "primer_name:SEQUENCE"
+```
+
+Multiple primers (semicolon-separated):
+```bash
+--pool -p "p1:AGAGTTTGATCMTGGCTCAG;p2:GWATTACCGCGGCKGCTG"
+```
+
+Pool CSV file (2 columns):
+```csv
+name,sequence
+27F,AGAGTTTGATCMTGGCTCAG
+519R,GWATTACCGCGGCKGCTG
+1492R,TACGGYTACCTTGTTACGACTT
+```
+
+Products are found between any two primers that match in correct orientation and distance. Product names use the `primerA+primerB` format.
 
 ## Output Formats
 

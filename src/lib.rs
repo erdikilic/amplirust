@@ -33,5 +33,5 @@ pub use cli::Args;
 pub use input::SequenceRecord;
 pub use matcher::{MatchConfig, PrimerMatch, PrimerMatcher};
 pub use output::RunSummary;
-pub use pcr::{PcrConfig, PcrProduct};
-pub use primer::PrimerPair;
+pub use pcr::{PcrConfig, PcrProduct, find_pool_products};
+pub use primer::{Primer, PrimerPair};

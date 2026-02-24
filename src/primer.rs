@@ -1,7 +1,8 @@
-//! Primer pair parsing and validation.
+//! Primer pair and pool parsing and validation.
 //!
-//! Reads primer pairs from CSV files or inline colon-separated strings,
-//! validates IUPAC nucleotide characters, and warns about unusual lengths.
+//! Reads primer pairs (or individual pool primers) from CSV files or inline
+//! colon-separated strings, validates IUPAC nucleotide characters, and warns
+//! about unusual lengths.
 
 use anyhow::{Context, Result, bail};
 use std::path::Path;
@@ -58,6 +59,41 @@ impl PrimerPair {
     }
 }
 
+/// Represents a single primer for pool mode (all-vs-all matching)
+#[derive(Debug, Clone)]
+pub struct Primer {
+    /// Name/identifier for this primer
+    pub name: String,
+    /// Primer sequence (5' to 3')
+    pub sequence: Vec<u8>,
+}
+
+impl Primer {
+    /// Create a new pool primer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the sequence contains invalid IUPAC characters.
+    pub fn new(name: impl Into<String>, sequence: impl AsRef<[u8]>) -> Result<Self> {
+        let name = name.into();
+        let sequence = sequence.as_ref().to_ascii_uppercase();
+        validate_iupac_sequence(&sequence, &name, "pool")?;
+        Ok(Self { name, sequence })
+    }
+
+    /// Get primer sequence length
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.sequence.len()
+    }
+
+    /// Check if the primer sequence is empty
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.sequence.is_empty()
+    }
+}
+
 /// Minimum recommended primer length (bp). Primers shorter than this are
 /// unusually short for typical PCR and may produce non-specific amplification.
 const MIN_PRIMER_LEN: usize = 10;
@@ -84,6 +120,21 @@ pub fn warn_primer_length(primer: &PrimerPair) {
                 MAX_PRIMER_LEN,
             );
         }
+    }
+}
+
+/// Emit `log::warn!` for a pool primer whose length falls outside the
+/// recommended range (`MIN_PRIMER_LEN..=MAX_PRIMER_LEN`).
+pub fn warn_pool_primer_length(primer: &Primer) {
+    let len = primer.len();
+    if !(MIN_PRIMER_LEN..=MAX_PRIMER_LEN).contains(&len) {
+        log::warn!(
+            "Pool primer '{}' has unusual length ({} bp); recommended range is {}-{} bp",
+            primer.name,
+            len,
+            MIN_PRIMER_LEN,
+            MAX_PRIMER_LEN,
+        );
     }
 }
 
@@ -123,6 +174,144 @@ pub fn parse_primers(input: &str) -> Result<Vec<PrimerPair>> {
         // Try to parse as inline primer specification
         parse_primers_from_string(input)
     }
+}
+
+/// Parse pool primers from either a CLI argument string or a CSV file.
+///
+/// Pool format uses 2 fields (name + sequence) instead of 3 (name + forward + reverse).
+///
+/// # Errors
+///
+/// Returns an error if the input cannot be parsed as valid pool primers
+/// or if the CSV file cannot be read.
+pub fn parse_pool_primers(input: &str) -> Result<Vec<Primer>> {
+    let path = Path::new(input);
+
+    if path.exists() && path.is_file() {
+        parse_pool_primers_from_csv(path)
+    } else {
+        parse_pool_primers_from_string(input)
+    }
+}
+
+/// Parse pool primers from a CSV file
+/// Expected format: name,sequence (with header, 2 columns)
+fn parse_pool_primers_from_csv(path: &Path) -> Result<Vec<Primer>> {
+    let mut reader = csv::ReaderBuilder::new()
+        .has_headers(true)
+        .flexible(true)
+        .trim(csv::Trim::All)
+        .from_path(path)
+        .with_context(|| format!("Failed to open pool primer CSV file: {}", path.display()))?;
+
+    let headers = reader
+        .headers()
+        .with_context(|| {
+            format!(
+                "Failed to read CSV headers from '{}'; expected format: name,sequence",
+                path.display()
+            )
+        })?
+        .clone();
+
+    if headers.len() < 2 {
+        return Err(ValidationError::CsvFormat {
+            path: path.to_path_buf(),
+            detail: format!(
+                "header has {} column(s), expected at least 2 (name, sequence). Got: {}",
+                headers.len(),
+                headers.iter().collect::<Vec<_>>().join(","),
+            ),
+        }
+        .into());
+    }
+
+    let mut primers = Vec::new();
+
+    for (i, result) in reader.records().enumerate() {
+        let record = result.with_context(|| format!("Error reading CSV row {}", i + 2))?;
+
+        if record.len() < 2 {
+            return Err(ValidationError::CsvFormat {
+                path: path.to_path_buf(),
+                detail: format!(
+                    "row {} has {} column(s), expected at least 2 (name, sequence)",
+                    i + 2,
+                    record.len(),
+                ),
+            }
+            .into());
+        }
+
+        let name = record.get(0).unwrap_or("").trim();
+        let sequence = record.get(1).unwrap_or("").trim();
+
+        if name.is_empty() || sequence.is_empty() {
+            bail!("Pool CSV row {} has empty fields", i + 2);
+        }
+
+        let primer = Primer::new(name, sequence.as_bytes())
+            .with_context(|| format!("Error parsing pool primer at CSV row {}", i + 2))?;
+
+        primers.push(primer);
+    }
+
+    if primers.is_empty() {
+        bail!("No pool primers found in CSV file: {}", path.display());
+    }
+
+    log::info!("Loaded {} pool primer(s) from CSV", primers.len());
+    Ok(primers)
+}
+
+/// Parse pool primers from a string specification
+/// Format: "name:sequence" or multiple separated by semicolons
+/// Example: "p1:AGAGTTTGATCMTGGCTCAG;p2:GWATTACCGCGGCKGCTG"
+fn parse_pool_primers_from_string(input: &str) -> Result<Vec<Primer>> {
+    let mut primers = Vec::new();
+
+    for (i, spec) in input.split(';').enumerate() {
+        let spec = spec.trim();
+        if spec.is_empty() {
+            continue;
+        }
+
+        let parts: Vec<&str> = spec.split(':').collect();
+
+        if parts.len() != 2 {
+            bail!(
+                "Invalid pool primer specification '{}' (primer {}). \
+                 Expected format: 'name:sequence'",
+                spec,
+                i + 1
+            );
+        }
+
+        let name = parts[0].trim();
+        let sequence = parts[1].trim();
+
+        if name.is_empty() || sequence.is_empty() {
+            bail!(
+                "Pool primer specification '{spec}' has empty fields. \
+                 Expected format: 'name:sequence'"
+            );
+        }
+
+        let primer = Primer::new(name, sequence.as_bytes())
+            .with_context(|| format!("Error parsing pool primer specification '{spec}'"))?;
+
+        primers.push(primer);
+    }
+
+    if primers.is_empty() {
+        bail!(
+            "No valid pool primers found in input '{input}'. \
+             Expected format: 'name:sequence' or path to CSV file"
+        );
+    }
+
+    log::info!("Parsed {} pool primer(s) from command line", primers.len());
+    Ok(primers)
 }
 
 /// Parse primers from a CSV file
@@ -376,5 +565,111 @@ mod tests {
         let primer =
             PrimerPair::new("normal", b"ACGTACGTACGTACGTACGT", b"TGCATGCATGCATGCATGCA").unwrap();
         warn_primer_length(&primer); // no panic = pass
+    }
+
+    // ── Pool primer tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_pool_primer_new() {
+        let primer = Primer::new("p1", b"ACGT").unwrap();
+        assert_eq!(primer.name, "p1");
+        assert_eq!(primer.sequence, b"ACGT");
+        assert_eq!(primer.len(), 4);
+        assert!(!primer.is_empty());
+    }
+
+    #[test]
+    fn test_pool_primer_lowercase() {
+        let primer = Primer::new("p1", b"acgt").unwrap();
+        assert_eq!(primer.sequence, b"ACGT");
+    }
+
+    #[test]
+    fn test_pool_primer_invalid_char() {
+        let result = Primer::new("p1", b"ACGTX");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_pool_primers_inline() {
+        let primers = parse_pool_primers("p1:ACGT;p2:TGCA").unwrap();
+        assert_eq!(primers.len(), 2);
+        assert_eq!(primers[0].name, "p1");
+        assert_eq!(primers[0].sequence, b"ACGT");
+        assert_eq!(primers[1].name, "p2");
+        assert_eq!(primers[1].sequence, b"TGCA");
+    }
+
+    #[test]
+    fn test_parse_pool_primers_single() {
+        let primers = parse_pool_primers("p1:ACGT").unwrap();
+        assert_eq!(primers.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_pool_primers_invalid_format() {
+        // 3-field format should fail in pool mode
+        let result = parse_pool_primers("p1:ACGT:TGCA");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_pool_primers_empty_fields() {
+        let result = parse_pool_primers("p1:");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_pool_primers_csv() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut temp = NamedTempFile::with_suffix(".csv").unwrap();
+        writeln!(temp, "name,sequence").unwrap();
+        writeln!(temp, "p1,AGAGTTTGATCMTGGCTCAG").unwrap();
+        writeln!(temp, "p2,GWATTACCGCGGCKGCTG").unwrap();
+        temp.flush().unwrap();
+
+        let primers = parse_pool_primers(temp.path().to_str().unwrap()).unwrap();
+        assert_eq!(primers.len(), 2);
+        assert_eq!(primers[0].name, "p1");
+        assert_eq!(primers[1].name, "p2");
+    }
+
+    #[test]
+    fn test_parse_pool_primers_csv_too_few_columns() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut temp = NamedTempFile::with_suffix(".csv").unwrap();
+        writeln!(temp, "name").unwrap();
+        writeln!(temp, "p1").unwrap();
+        temp.flush().unwrap();
+
+        let result = parse_pool_primers(temp.path().to_str().unwrap());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_pool_primers_csv_empty_fields() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut temp = NamedTempFile::with_suffix(".csv").unwrap();
+        writeln!(temp, "name,sequence").unwrap();
+        writeln!(temp, "p1,").unwrap();
+        temp.flush().unwrap();
+
+        let result = parse_pool_primers(temp.path().to_str().unwrap());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_warn_pool_primer_length() {
+        let short = Primer::new("short", b"ACGT").unwrap();
+        warn_pool_primer_length(&short); // no panic = pass
+
+        let normal = Primer::new("normal", b"ACGTACGTACGTACGTACGT").unwrap();
+        warn_pool_primer_length(&normal); // no panic = pass
     }
 }

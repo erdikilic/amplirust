@@ -6,7 +6,7 @@
 
 use crate::input::SequenceRecord;
 use crate::matcher::{MatchConfig, PrimerMatch, PrimerMatcher};
-use crate::primer::PrimerPair;
+use crate::primer::{Primer, PrimerPair};
 use crate::utils::{
     circular_to_original_pos, is_circular_wrap, make_circular_searchable, reverse_complement,
 };
@@ -449,6 +449,258 @@ fn n_fraction(sequence: &[u8]) -> f64 {
     }
     let n_count = memchr::memchr_iter(b'N', sequence).count();
     n_count as f64 / sequence.len() as f64
+}
+
+/// Find all PCR products from a pool of individual primers (all-vs-all matching).
+///
+/// Each primer is searched in both forward and reverse-complement orientation.
+/// Products are formed between any forward match of `primer_i` and any RC match of
+/// `primer_j`, subject to distance and quality filters. When `allow_self_match` is
+/// false, `primer_i` and `primer_j` must be different primers.
+#[must_use]
+pub fn find_pool_products(
+    record: &SequenceRecord,
+    primers: &[Primer],
+    config: &PcrConfig,
+    allow_self_match: bool,
+) -> Vec<PcrProduct> {
+    let mut products = Vec::new();
+    let original_len = record.sequence.len();
+
+    if original_len == 0 || primers.is_empty() {
+        return products;
+    }
+
+    let search_seq: Cow<[u8]> = if config.circular {
+        Cow::Owned(make_circular_searchable(&record.sequence, config.max_len))
+    } else {
+        Cow::Borrowed(&record.sequence)
+    };
+
+    // Create forward-only matcher
+    let fwd_config = MatchConfig {
+        search_rc: false,
+        ..config.match_config.clone()
+    };
+    let mut matcher = PrimerMatcher::new(fwd_config);
+
+    // Search phase: collect all forward and RC matches for each primer
+    let fwd_matches: Vec<Vec<PrimerMatch>> = primers
+        .iter()
+        .map(|p| matcher.find_matches(&p.sequence, &search_seq))
+        .collect();
+
+    let rc_matches: Vec<Vec<PrimerMatch>> = primers
+        .iter()
+        .map(|p| {
+            let rc = reverse_complement(&p.sequence);
+            matcher.find_matches(&rc, &search_seq)
+        })
+        .collect();
+
+    // Pairing phase: for each fwd match of primer_i, check RC matches of primer_j
+    for (i, fwd_hits) in fwd_matches.iter().enumerate() {
+        for fwd_match in fwd_hits {
+            for (j, rc_hits) in rc_matches.iter().enumerate() {
+                if !allow_self_match && i == j {
+                    continue;
+                }
+
+                for rev_match in rc_hits {
+                    // RC match must be downstream of forward match
+                    if rev_match.end <= fwd_match.start {
+                        continue;
+                    }
+
+                    let product_start = fwd_match.start;
+                    let product_end = rev_match.end;
+                    let product_len = product_end - product_start;
+
+                    if product_len < config.min_len || product_len > config.max_len {
+                        continue;
+                    }
+
+                    let is_wrap =
+                        config.circular && is_circular_wrap(product_end - 1, original_len);
+
+                    let (sequence, original_start, original_end) = if config.trim_primers {
+                        let trim_start = fwd_match.end;
+                        let trim_end = rev_match.start;
+                        if trim_start >= trim_end {
+                            continue;
+                        }
+                        let seq = search_seq[trim_start..trim_end].to_vec();
+                        (
+                            seq,
+                            circular_to_original_pos(trim_start, original_len),
+                            circular_to_original_pos(trim_end, original_len),
+                        )
+                    } else {
+                        let seq = search_seq[product_start..product_end].to_vec();
+                        (
+                            seq,
+                            circular_to_original_pos(product_start, original_len),
+                            circular_to_original_pos(product_end, original_len),
+                        )
+                    };
+
+                    if n_fraction(&sequence) > config.max_n_fraction {
+                        continue;
+                    }
+
+                    let primer_name = format!("{}+{}", primers[i].name, primers[j].name);
+
+                    products.push(PcrProduct {
+                        reference_header: record.header.clone(),
+                        source_file: record.source_file.display().to_string(),
+                        primer_name,
+                        sequence,
+                        full_length: product_len,
+                        fwd_match: fwd_match.clone(),
+                        rev_match: rev_match.clone(),
+                        strand: Strand::Fwd,
+                        is_circular_wrap: is_wrap,
+                        original_start,
+                        original_end,
+                        case_number: 0,
+                    });
+                }
+            }
+        }
+    }
+
+    // RC strand search
+    if config.match_config.search_rc {
+        let rc_products =
+            find_pool_rc_strand_products(record, primers, config, original_len, allow_self_match);
+        products.extend(rc_products);
+    }
+
+    // Assign case numbers
+    for (i, product) in products.iter_mut().enumerate() {
+        product.case_number = i + 1;
+    }
+
+    products
+}
+
+/// Find pool products on the reverse complement strand
+fn find_pool_rc_strand_products(
+    record: &SequenceRecord,
+    primers: &[Primer],
+    config: &PcrConfig,
+    original_len: usize,
+    allow_self_match: bool,
+) -> Vec<PcrProduct> {
+    let mut products = Vec::new();
+
+    let rc_sequence = reverse_complement(&record.sequence);
+    let rc_search_seq = if config.circular {
+        make_circular_searchable(&rc_sequence, config.max_len)
+    } else {
+        rc_sequence
+    };
+
+    let fwd_config = MatchConfig {
+        search_rc: false,
+        ..config.match_config.clone()
+    };
+    let mut matcher = PrimerMatcher::new(fwd_config);
+
+    let fwd_matches: Vec<Vec<PrimerMatch>> = primers
+        .iter()
+        .map(|p| matcher.find_matches(&p.sequence, &rc_search_seq))
+        .collect();
+
+    let rc_matches: Vec<Vec<PrimerMatch>> = primers
+        .iter()
+        .map(|p| {
+            let rc = reverse_complement(&p.sequence);
+            matcher.find_matches(&rc, &rc_search_seq)
+        })
+        .collect();
+
+    for (i, fwd_hits) in fwd_matches.iter().enumerate() {
+        for fwd_match in fwd_hits {
+            for (j, rc_hits) in rc_matches.iter().enumerate() {
+                if !allow_self_match && i == j {
+                    continue;
+                }
+
+                for rev_match in rc_hits {
+                    if rev_match.end <= fwd_match.start {
+                        continue;
+                    }
+
+                    let product_start = fwd_match.start;
+                    let product_end = rev_match.end;
+                    let product_len = product_end - product_start;
+
+                    if product_len < config.min_len || product_len > config.max_len {
+                        continue;
+                    }
+
+                    let is_wrap =
+                        config.circular && is_circular_wrap(product_end - 1, original_len);
+
+                    let (sequence, original_start, original_end) = if config.trim_primers {
+                        let trim_start = fwd_match.end;
+                        let trim_end = rev_match.start;
+                        if trim_start >= trim_end {
+                            continue;
+                        }
+                        let seq = rc_search_seq[trim_start..trim_end].to_vec();
+                        let rc_trim_start = circular_to_original_pos(trim_start, original_len);
+                        let rc_trim_end = circular_to_original_pos(trim_end, original_len);
+                        let orig_start = original_len.saturating_sub(rc_trim_end);
+                        let orig_end = original_len.saturating_sub(rc_trim_start);
+                        (seq, orig_start, orig_end)
+                    } else {
+                        let seq = rc_search_seq[product_start..product_end].to_vec();
+                        let rc_product_start =
+                            circular_to_original_pos(product_start, original_len);
+                        let rc_product_end = circular_to_original_pos(product_end, original_len);
+                        let orig_start = original_len.saturating_sub(rc_product_end);
+                        let orig_end = original_len.saturating_sub(rc_product_start);
+                        (seq, orig_start, orig_end)
+                    };
+
+                    if n_fraction(&sequence) > config.max_n_fraction {
+                        continue;
+                    }
+
+                    let primer_name = format!("{}+{}", primers[i].name, primers[j].name);
+
+                    let adjusted_fwd_match = PrimerMatch {
+                        strand: Strand::Rc,
+                        ..fwd_match.clone()
+                    };
+
+                    let adjusted_rev_match = PrimerMatch {
+                        strand: Strand::Rc,
+                        ..rev_match.clone()
+                    };
+
+                    products.push(PcrProduct {
+                        reference_header: record.header.clone(),
+                        source_file: record.source_file.display().to_string(),
+                        primer_name,
+                        sequence,
+                        full_length: product_len,
+                        fwd_match: adjusted_fwd_match,
+                        rev_match: adjusted_rev_match,
+                        strand: Strand::Rc,
+                        is_circular_wrap: is_wrap,
+                        original_start,
+                        original_end,
+                        case_number: 0,
+                    });
+                }
+            }
+        }
+    }
+
+    products
 }
 
 #[cfg(test)]
@@ -1318,5 +1570,262 @@ mod tests {
             products_tight.is_empty(),
             "Products above max_len should be excluded"
         );
+    }
+
+    // ── Pool mode tests ───────────────────────────────────────────────────
+
+    fn make_pool_config() -> PcrConfig {
+        PcrConfig {
+            match_config: MatchConfig {
+                max_errors: 0,
+                min_identity: 0.0,
+                search_rc: false,
+            },
+            min_len: 8,
+            max_len: 200,
+            circular: false,
+            trim_primers: false,
+            max_n_fraction: 1.0,
+        }
+    }
+
+    #[test]
+    fn test_pool_basic_two_primers() {
+        // Sequence: p1_fwd ... RC(p2) forms a product
+        // p1=AAAA, p2=CCCC, RC(CCCC)=GGGG
+        // Sequence: AAAAGTAGTGGGG
+        //           ^p1_fwd       ^RC(p2)
+        let record = make_record("test", b"AAAAGTAGTGGGG");
+        let primers = vec![
+            Primer::new("p1", b"AAAA").unwrap(),
+            Primer::new("p2", b"CCCC").unwrap(),
+        ];
+        let config = make_pool_config();
+
+        let products = find_pool_products(&record, &primers, &config, false);
+        assert!(
+            !products.is_empty(),
+            "Should find product between p1 fwd and RC(p2)"
+        );
+        assert!(
+            products[0].primer_name.contains('+'),
+            "Product name should use primerA+primerB format"
+        );
+    }
+
+    #[test]
+    fn test_pool_self_match_disabled() {
+        // p1=AAAA, RC(AAAA)=TTTT
+        // Sequence has both AAAA and TTTT
+        let record = make_record("test", b"AAAAGTAGTTTTT");
+        let primers = vec![Primer::new("p1", b"AAAA").unwrap()];
+        let config = make_pool_config();
+
+        let products = find_pool_products(&record, &primers, &config, false);
+        assert!(
+            products.is_empty(),
+            "Self-match should be disabled by default"
+        );
+    }
+
+    #[test]
+    fn test_pool_self_match_enabled() {
+        // Same setup but allow_self_match=true
+        let record = make_record("test", b"AAAAGTAGTTTTT");
+        let primers = vec![Primer::new("p1", b"AAAA").unwrap()];
+        let config = make_pool_config();
+
+        let products = find_pool_products(&record, &primers, &config, true);
+        assert!(
+            !products.is_empty(),
+            "Self-match should produce product when enabled"
+        );
+        assert_eq!(products[0].primer_name, "p1+p1");
+    }
+
+    #[test]
+    fn test_pool_both_orientations() {
+        // p1 fwd + RC(p2) AND p2 fwd + RC(p1) should both be found
+        // p1=AAAA, p2=CCCC
+        // RC(p1)=TTTT, RC(p2)=GGGG
+        // Sequence: AAAAGTAGTGGGG (p1 fwd at 0, RC(p2) at 9 => p1+p2)
+        // Also: CCCCGTAGTTTTT (p2 fwd at 0, RC(p1) at 9 => p2+p1)
+        let record = make_record("test", b"AAAAGTAGTGGGGNNNNCCCCGTAGTTTTT");
+        let primers = vec![
+            Primer::new("p1", b"AAAA").unwrap(),
+            Primer::new("p2", b"CCCC").unwrap(),
+        ];
+        let config = PcrConfig {
+            max_len: 300,
+            ..make_pool_config()
+        };
+
+        let products = find_pool_products(&record, &primers, &config, false);
+        let names: Vec<&str> = products.iter().map(|p| p.primer_name.as_str()).collect();
+        assert!(
+            names.contains(&"p1+p2"),
+            "Should find p1+p2 product. Got: {names:?}"
+        );
+        assert!(
+            names.contains(&"p2+p1"),
+            "Should find p2+p1 product. Got: {names:?}"
+        );
+    }
+
+    #[test]
+    fn test_pool_length_filtering() {
+        // Product too short should be filtered
+        let record = make_record("test", b"AAAATTTT"); // len 8, product = entire seq
+        let primers = vec![Primer::new("p1", b"AAAA").unwrap()];
+        let config = PcrConfig {
+            min_len: 100, // require at least 100bp
+            ..make_pool_config()
+        };
+
+        let products = find_pool_products(&record, &primers, &config, true);
+        assert!(products.is_empty(), "Short products should be filtered");
+    }
+
+    #[test]
+    fn test_pool_empty_inputs() {
+        let config = make_pool_config();
+
+        // Empty primer pool
+        let record = make_record("test", b"ACGTACGT");
+        let products = find_pool_products(&record, &[], &config, false);
+        assert!(products.is_empty(), "Empty pool should produce no products");
+
+        // Empty sequence
+        let record = make_record("test", b"");
+        let primers = vec![Primer::new("p1", b"AAAA").unwrap()];
+        let products = find_pool_products(&record, &primers, &config, false);
+        assert!(
+            products.is_empty(),
+            "Empty sequence should produce no products"
+        );
+    }
+
+    #[test]
+    fn test_pool_single_primer_no_self_match() {
+        // Single primer without self-match should give no products
+        let record = make_record("test", b"AAAAGTAGTTTTT");
+        let primers = vec![Primer::new("p1", b"AAAA").unwrap()];
+        let config = make_pool_config();
+
+        let products = find_pool_products(&record, &primers, &config, false);
+        assert!(
+            products.is_empty(),
+            "Single primer without self-match should produce no products"
+        );
+    }
+
+    #[test]
+    fn test_pool_circular_genome() {
+        // Product wraps around circular genome
+        // p1=TTTT at end, RC(p2)=GGGG at start (after wrap)
+        // Sequence: GGGGNNNTTTT
+        // In circular mode, extended: GGGGNNNTTTTGGGG
+        // p1(TTTT) fwd at pos 7, RC(p2=CCCC)=GGGG at pos 11 => wraps
+        let record = make_record("test", b"GGGGNNNTTTT");
+        let primers = vec![
+            Primer::new("p1", b"TTTT").unwrap(),
+            Primer::new("p2", b"CCCC").unwrap(),
+        ];
+        let config = PcrConfig {
+            circular: true,
+            ..make_pool_config()
+        };
+
+        let products = find_pool_products(&record, &primers, &config, false);
+        // Should find a product that wraps around
+        assert!(
+            !products.is_empty(),
+            "Circular pool should find wrap-around products"
+        );
+    }
+
+    #[test]
+    fn test_pool_rc_strand() {
+        // Enable search_rc to find products on the RC strand
+        let record = make_record("test", b"AAAAGTAGTGGGG");
+        let primers = vec![
+            Primer::new("p1", b"AAAA").unwrap(),
+            Primer::new("p2", b"CCCC").unwrap(),
+        ];
+        let config = PcrConfig {
+            match_config: MatchConfig {
+                search_rc: true,
+                ..make_pool_config().match_config
+            },
+            ..make_pool_config()
+        };
+
+        let products = find_pool_products(&record, &primers, &config, false);
+        // Should find products on both strands
+        let fwd_count = products.iter().filter(|p| p.strand == Strand::Fwd).count();
+        let rc_count = products.iter().filter(|p| p.strand == Strand::Rc).count();
+        assert!(fwd_count > 0, "Should find products on forward strand");
+        assert!(rc_count > 0, "Should find products on RC strand");
+    }
+
+    #[test]
+    fn test_pool_case_numbers_assigned() {
+        let record = make_record("test", b"AAAAGTAGTGGGG");
+        let primers = vec![
+            Primer::new("p1", b"AAAA").unwrap(),
+            Primer::new("p2", b"CCCC").unwrap(),
+        ];
+        let config = make_pool_config();
+
+        let products = find_pool_products(&record, &primers, &config, false);
+        if !products.is_empty() {
+            assert_eq!(products[0].case_number, 1, "First product should be case 1");
+        }
+    }
+
+    #[test]
+    fn test_pool_three_primers() {
+        // Three primers should produce multiple combinations
+        // p1=AAAA, p2=CCCC, p3=GGGG
+        // RC: TTTT, GGGG, CCCC
+        // Sequence: AAAANNNCCCCNNNGGGGNNNTTTT
+        //           p1_fwd  p3_RC(=CCCC as RC? No, RC(GGGG)=CCCC)
+        // Wait: RC(p2=CCCC) = GGGG, RC(p3=GGGG) = CCCC
+        // fwd matches: p1 at 0, p2 at 7, p3 at 14
+        // RC matches: RC(p1)=TTTT at 21, RC(p2)=GGGG at 14, RC(p3)=CCCC at 7
+        // Valid pairs (fwd before rc):
+        //   p1(0) + RC(p2)(14) = p1+p2 len 18
+        //   p1(0) + RC(p1)(21) = p1+p1 (self, skip if !allow)
+        //   p2(7) + RC(p2)(14) = p2+p2 (self, skip if !allow)
+        //   p2(7) + RC(p1)(21) = p2+p1 len 18 (wait, RC(p1)=TTTT at pos 21, so 21+4-7=18)
+        //   p1(0) + RC(p3)(7) = p1+p3 len 11
+        //   p3(14) + RC(p1)(21) = p3+p1 len 11
+        let record = make_record("test", b"AAAANNNCCCCNNNGGGGNNNTTTT");
+        let primers = vec![
+            Primer::new("p1", b"AAAA").unwrap(),
+            Primer::new("p2", b"CCCC").unwrap(),
+            Primer::new("p3", b"GGGG").unwrap(),
+        ];
+        let config = PcrConfig {
+            max_len: 300,
+            ..make_pool_config()
+        };
+
+        let products = find_pool_products(&record, &primers, &config, false);
+        assert!(
+            products.len() >= 2,
+            "Three primers should produce multiple products. Got: {}",
+            products.len()
+        );
+
+        let names: Vec<&str> = products.iter().map(|p| p.primer_name.as_str()).collect();
+        // Verify no self-matches
+        for name in &names {
+            let parts: Vec<&str> = name.split('+').collect();
+            assert_ne!(
+                parts[0], parts[1],
+                "Self-match should not be present: {name}"
+            );
+        }
     }
 }

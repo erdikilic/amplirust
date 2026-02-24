@@ -50,6 +50,16 @@ pub struct Args {
     #[arg(short = 't', long, default_value_t = 0)]
     pub threads: usize,
 
+    // ==================== POOL OPTIONS ====================
+    /// Treat primers as a pool of individual primers (all-vs-all matching).
+    /// When set, -p format is "name:sequence" instead of "name:forward:reverse".
+    #[arg(long, default_value_t = false)]
+    pub pool: bool,
+
+    /// In pool mode, allow the same primer to match as both forward and reverse
+    #[arg(long, default_value_t = false)]
+    pub pool_self_match: bool,
+
     // ==================== PRODUCT OPTIONS ====================
     /// Minimum PCR product length (including primers unless --trim-primers)
     #[arg(long, default_value_t = 50)]

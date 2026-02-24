@@ -36,6 +36,44 @@ Then reference the file:
 !!! tip "Which format to use?"
     Use inline primers for quick one-off searches. Use a CSV file when you have multiple primer pairs or want to reuse primers across runs.
 
+## Pool Mode Primers
+
+With `--pool`, primers are provided as individual sequences rather than forward/reverse pairs. Products are found between any two primers that match in correct orientation and distance.
+
+### Inline Format
+
+Single primer:
+
+```bash
+--pool -p "primer_name:SEQUENCE"
+```
+
+Multiple primers (semicolon-separated):
+
+```bash
+--pool -p "p1:AGAGTTTGATCMTGGCTCAG;p2:GWATTACCGCGGCKGCTG;p3:CCTACGGGNGGCWGCAG"
+```
+
+### CSV File (2 columns)
+
+Create a CSV file with the header `name,sequence`:
+
+```csv
+name,sequence
+27F,AGAGTTTGATCMTGGCTCAG
+519R,GWATTACCGCGGCKGCTG
+1492R,TACGGYTACCTTGTTACGACTT
+```
+
+Then reference the file:
+
+```bash
+--pool -p pool_primers.csv
+```
+
+!!! tip "When to use pool mode"
+    Use pool mode (`--pool`) for multiplex panel design, MLST typing schemes, or exploratory primer screening where any two primers can form a product. Use `--pool-self-match` to also find products where the same primer acts as both forward and reverse.
+
 ## IUPAC Ambiguity Codes
 
 Primer sequences support standard IUPAC ambiguity codes. These codes are expanded during matching, allowing a single primer to match multiple sequence variants.

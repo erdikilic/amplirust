@@ -9,7 +9,7 @@ amplirust [OPTIONS] --input <INPUT> --primers <PRIMERS>
 | Option | Default | Description |
 |--------|---------|-------------|
 | `-i, --input <FILES>` | | Input sequence files (comma-separated, glob patterns supported). Supports FASTA (`.fasta`, `.fa`, `.fna`, `.ffn`, `.fas`) and GenBank (`.gb`, `.gbk`, `.gbff`, `.genbank`, `.gbf`), including gzip-compressed (`.gz`). Unrecognized file types in glob results are skipped with a warning. |
-| `-p, --primers <PRIMERS>` | | Primers as `name:forward:reverse` or path to CSV file |
+| `-p, --primers <PRIMERS>` | | Primers as `name:forward:reverse` or path to CSV file (with `--pool`: `name:sequence`) |
 | `--circular` | false | Treat sequences as circular genomes |
 | `--max-decompression-size <N>` | 4294967296 | Maximum decompressed file size in bytes (0 = unlimited) |
 
@@ -21,6 +21,13 @@ amplirust [OPTIONS] --input <INPUT> --primers <PRIMERS>
 | `--min-identity <FLOAT>` | 0 (disabled) | Minimum identity threshold (0.0-1.0) |
 | `--search-rc` | false | Also search reverse complement strand |
 | `-t, --threads <N>` | auto | Number of threads (0 = auto-detect) |
+
+## Pool Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--pool` | false | Treat primers as a pool of individual primers (all-vs-all matching) |
+| `--pool-self-match` | false | In pool mode, allow the same primer to match as both forward and reverse |
 
 ## Product Options
 
