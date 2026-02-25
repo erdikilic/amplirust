@@ -1,3 +1,8 @@
+//! Approximate primer matching using IUPAC-aware edit distance.
+//!
+//! Wraps the `sassy` library to provide primer-specific matching with
+//! identity filtering and optional reverse-complement search.
+
 use crate::utils::calculate_identity;
 use sassy::{Match, Searcher, Strand, profiles::Iupac};
 
@@ -41,6 +46,7 @@ pub struct PrimerMatch {
 
 impl PrimerMatch {
     /// Create from a sassy Match, calculating identity
+    #[must_use]
     pub fn from_sassy_match(m: &Match, primer_len: usize) -> Self {
         let cost = m.cost as usize;
         // Use primer length for identity calculation (standard practice)
@@ -57,6 +63,7 @@ impl PrimerMatch {
     }
 
     /// Length of the matched region in the text
+    #[must_use]
     pub fn match_len(&self) -> usize {
         self.end - self.start
     }
@@ -72,6 +79,7 @@ pub struct PrimerMatcher {
 
 impl PrimerMatcher {
     /// Create a new primer matcher with the given configuration
+    #[must_use]
     pub fn new(config: MatchConfig) -> Self {
         let searcher = if config.search_rc {
             Searcher::<Iupac>::new_rc()
@@ -112,12 +120,14 @@ impl PrimerMatcher {
     }
 
     /// Check if search includes reverse complement
+    #[must_use]
     pub fn searches_rc(&self) -> bool {
         self.config.search_rc
     }
 }
 
 /// Find forward primer matches in a sequence
+#[must_use]
 pub fn find_forward_matches(
     primer: &[u8],
     sequence: &[u8],
@@ -130,6 +140,7 @@ pub fn find_forward_matches(
 /// Find reverse primer matches in a sequence
 /// Note: The reverse primer should be searched on the reverse complement
 /// or using sassy's RC mode which handles this automatically
+#[must_use]
 pub fn find_reverse_matches(
     primer: &[u8],
     sequence: &[u8],
@@ -273,5 +284,172 @@ mod tests {
         for m in &matches {
             assert!(m.identity >= 0.75, "Should filter matches below threshold");
         }
+    }
+
+    // ── Tests for mutation-gap coverage ──────────────────────────────────
+
+    #[test]
+    fn test_match_len_calculation() {
+        // Directly test PrimerMatch::match_len to catch arithmetic mutations
+        let pm = PrimerMatch {
+            start: 3,
+            end: 7,
+            edit_distance: 0,
+            strand: Strand::Fwd,
+            cigar: "4=".to_string(),
+            identity: 1.0,
+        };
+        assert_eq!(pm.match_len(), 4, "match_len should be end - start");
+
+        let pm2 = PrimerMatch {
+            start: 0,
+            end: 1,
+            edit_distance: 0,
+            strand: Strand::Fwd,
+            cigar: "1=".to_string(),
+            identity: 1.0,
+        };
+        assert_eq!(pm2.match_len(), 1);
+
+        let pm3 = PrimerMatch {
+            start: 10,
+            end: 10,
+            edit_distance: 0,
+            strand: Strand::Fwd,
+            cigar: String::new(),
+            identity: 1.0,
+        };
+        assert_eq!(pm3.match_len(), 0, "same start/end should give 0 length");
+    }
+
+    #[test]
+    fn test_searches_rc_true() {
+        let config = MatchConfig {
+            max_errors: 0,
+            min_identity: 1.0,
+            search_rc: true,
+        };
+        let matcher = PrimerMatcher::new(config);
+        assert!(
+            matcher.searches_rc(),
+            "searches_rc should return true when search_rc=true"
+        );
+    }
+
+    #[test]
+    fn test_searches_rc_false() {
+        let config = MatchConfig {
+            max_errors: 0,
+            min_identity: 1.0,
+            search_rc: false,
+        };
+        let matcher = PrimerMatcher::new(config);
+        assert!(
+            !matcher.searches_rc(),
+            "searches_rc should return false when search_rc=false"
+        );
+    }
+
+    #[test]
+    fn test_find_matches_raw_returns_results() {
+        let config = MatchConfig {
+            max_errors: 0,
+            min_identity: 1.0,
+            search_rc: false,
+        };
+        let mut matcher = PrimerMatcher::new(config);
+        let raw = matcher.find_matches_raw(b"ACGT", b"AAAACGTAAA");
+        assert!(!raw.is_empty(), "find_matches_raw should return matches");
+    }
+
+    #[test]
+    fn test_find_matches_raw_empty_primer() {
+        let config = MatchConfig {
+            max_errors: 0,
+            min_identity: 1.0,
+            search_rc: false,
+        };
+        let mut matcher = PrimerMatcher::new(config);
+        let raw = matcher.find_matches_raw(b"", b"AAAACGTAAA");
+        assert!(
+            raw.is_empty(),
+            "find_matches_raw with empty primer should return empty"
+        );
+    }
+
+    #[test]
+    fn test_find_matches_raw_empty_sequence() {
+        let config = MatchConfig {
+            max_errors: 0,
+            min_identity: 1.0,
+            search_rc: false,
+        };
+        let mut matcher = PrimerMatcher::new(config);
+        let raw = matcher.find_matches_raw(b"ACGT", b"");
+        assert!(
+            raw.is_empty(),
+            "find_matches_raw with empty sequence should return empty"
+        );
+    }
+
+    #[test]
+    fn test_find_forward_matches_standalone() {
+        let config = MatchConfig {
+            max_errors: 0,
+            min_identity: 1.0,
+            search_rc: false,
+        };
+        let matches = find_forward_matches(b"ACGT", b"AAAACGTAAA", &config);
+        assert_eq!(
+            matches.len(),
+            1,
+            "find_forward_matches should find the match"
+        );
+        assert_eq!(matches[0].start, 3);
+        assert_eq!(matches[0].end, 7);
+    }
+
+    #[test]
+    fn test_find_reverse_matches_standalone() {
+        let config = MatchConfig {
+            max_errors: 0,
+            min_identity: 1.0,
+            search_rc: false,
+        };
+        let matches = find_reverse_matches(b"ACGT", b"AAAACGTAAA", &config);
+        assert_eq!(
+            matches.len(),
+            1,
+            "find_reverse_matches should find the match"
+        );
+        assert_eq!(matches[0].start, 3);
+    }
+
+    #[test]
+    fn test_find_forward_matches_no_match() {
+        let config = MatchConfig {
+            max_errors: 0,
+            min_identity: 1.0,
+            search_rc: false,
+        };
+        let matches = find_forward_matches(b"TTTT", b"AAAACGTAAA", &config);
+        assert!(
+            matches.is_empty(),
+            "find_forward_matches should return empty for no match"
+        );
+    }
+
+    #[test]
+    fn test_find_reverse_matches_no_match() {
+        let config = MatchConfig {
+            max_errors: 0,
+            min_identity: 1.0,
+            search_rc: false,
+        };
+        let matches = find_reverse_matches(b"TTTT", b"AAAACGTAAA", &config);
+        assert!(
+            matches.is_empty(),
+            "find_reverse_matches should return empty for no match"
+        );
     }
 }

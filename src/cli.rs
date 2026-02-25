@@ -1,3 +1,7 @@
+//! Command-line argument parsing for amplirust.
+//!
+//! Uses clap derive macros for argument definition and validation.
+
 use clap::Parser;
 use std::path::PathBuf;
 
@@ -9,7 +13,7 @@ pub struct Args {
     // ==================== INPUT OPTIONS ====================
     /// Input sequence files (comma-separated, glob patterns supported)
     /// Supported formats: FASTA (.fasta, .fa, .fna, .ffn, .fas) and
-    /// GenBank (.gb, .gbk, .gbff, .genbank, .gbf). Gzip (.gz) supported.
+    /// `GenBank` (.gb, .gbk, .gbff, .genbank, .gbf). Gzip (.gz) supported.
     /// Unrecognized file types in glob results are skipped with a warning.
     #[arg(short, long, required = true, value_delimiter = ',')]
     pub input: Vec<String>,
@@ -23,6 +27,11 @@ pub struct Args {
     /// Treat sequences as circular genomes (allows wrap-around products)
     #[arg(long, default_value_t = false)]
     pub circular: bool,
+
+    /// Maximum decompressed file size in bytes (0 = unlimited).
+    /// Prevents memory exhaustion from malicious compressed files.
+    #[arg(long, default_value_t = 4_294_967_296)]
+    pub max_decompression_size: u64,
 
     // ==================== MATCHING OPTIONS ====================
     /// Maximum edit distance (mismatches + indels) for primer matching
@@ -40,6 +49,16 @@ pub struct Args {
     /// Number of threads to use (0 = auto-detect)
     #[arg(short = 't', long, default_value_t = 0)]
     pub threads: usize,
+
+    // ==================== POOL OPTIONS ====================
+    /// Treat primers as a pool of individual primers (all-vs-all matching).
+    /// When set, -p format is "name:sequence" instead of "name:forward:reverse".
+    #[arg(long, default_value_t = false)]
+    pub pool: bool,
+
+    /// In pool mode, allow the same primer to match as both forward and reverse
+    #[arg(long, default_value_t = false)]
+    pub pool_self_match: bool,
 
     // ==================== PRODUCT OPTIONS ====================
     /// Minimum PCR product length (including primers unless --trim-primers)
@@ -82,11 +101,13 @@ pub struct Args {
 
 impl Args {
     /// Parse command line arguments
+    #[must_use]
     pub fn parse_args() -> Self {
         Args::parse()
     }
 
     /// Get the effective number of threads
+    #[must_use]
     pub fn effective_threads(&self) -> usize {
         if self.threads == 0 {
             num_cpus::get()
@@ -96,6 +117,7 @@ impl Args {
     }
 
     /// Check if output should be gzip compressed
+    #[must_use]
     pub fn output_is_gzipped(&self) -> bool {
         self.output
             .as_ref()
@@ -104,6 +126,7 @@ impl Args {
     }
 
     /// Check if progress bar should be shown
+    #[must_use]
     pub fn show_progress(&self) -> bool {
         !self.quiet && self.verbose == 0
     }
@@ -135,5 +158,64 @@ mod tests {
             "test:ACGT:TGCA",
         ]);
         assert_eq!(args.input.len(), 3);
+    }
+
+    #[test]
+    fn test_effective_threads_auto() {
+        let args = Args::parse_from(["amplirust", "-i", "t.fa", "-p", "p:ACGT:TGCA"]);
+        assert_eq!(args.threads, 0);
+        assert!(args.effective_threads() > 0);
+    }
+
+    #[test]
+    fn test_effective_threads_explicit() {
+        let args = Args::parse_from(["amplirust", "-i", "t.fa", "-p", "p:ACGT:TGCA", "-t", "4"]);
+        assert_eq!(args.effective_threads(), 4);
+    }
+
+    #[test]
+    fn test_output_is_gzipped_true() {
+        let args = Args::parse_from([
+            "amplirust",
+            "-i",
+            "t.fa",
+            "-p",
+            "p:ACGT:TGCA",
+            "-o",
+            "out.fasta.gz",
+        ]);
+        assert!(args.output_is_gzipped());
+    }
+
+    #[test]
+    fn test_output_is_gzipped_false() {
+        let args = Args::parse_from([
+            "amplirust",
+            "-i",
+            "t.fa",
+            "-p",
+            "p:ACGT:TGCA",
+            "-o",
+            "out.fasta",
+        ]);
+        assert!(!args.output_is_gzipped());
+    }
+
+    #[test]
+    fn test_output_is_gzipped_no_output() {
+        let args = Args::parse_from(["amplirust", "-i", "t.fa", "-p", "p:ACGT:TGCA"]);
+        assert!(!args.output_is_gzipped());
+    }
+
+    #[test]
+    fn test_show_progress() {
+        let args = Args::parse_from(["amplirust", "-i", "t.fa", "-p", "p:ACGT:TGCA"]);
+        assert!(args.show_progress());
+
+        let quiet = Args::parse_from(["amplirust", "-i", "t.fa", "-p", "p:ACGT:TGCA", "-q"]);
+        assert!(!quiet.show_progress());
+
+        let verbose = Args::parse_from(["amplirust", "-i", "t.fa", "-p", "p:ACGT:TGCA", "-v"]);
+        assert!(!verbose.show_progress());
     }
 }

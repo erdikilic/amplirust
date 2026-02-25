@@ -1,4 +1,4 @@
-//! Lightweight GenBank format parser.
+//! Lightweight `GenBank` format parser.
 //!
 //! Only extracts fields needed for PCR analysis: LOCUS name, DEFINITION,
 //! ACCESSION, topology (circular/linear), and ORIGIN sequence data.
@@ -6,13 +6,44 @@
 
 use anyhow::{Context, Result};
 use std::io::{BufRead, BufReader, Read};
+use std::path::PathBuf;
 
-/// A parsed GenBank record containing only the fields we need.
+use crate::errors::ValidationError;
+
+/// Maximum allowed line length in bytes. Protects against pathological input
+/// (e.g., a file with no newlines designed to exhaust memory). Normal `GenBank`
+/// lines are under 200 bytes; long DEFINITION or COMMENT lines rarely exceed
+/// a few hundred. This limit is a safety net, not a format enforcer.
+const MAX_LINE_LENGTH: usize = 100_000; // 100 KB
+
+/// Check that a line does not exceed `MAX_LINE_LENGTH`.
+///
+/// Uses `trim_end()` length because `BufRead::read_line` appends the trailing
+/// newline to the buffer, which should not count against the content limit.
+fn check_line_length(line: &str) -> Result<()> {
+    let content_len = line.trim_end().len();
+    if content_len > MAX_LINE_LENGTH {
+        return Err(ValidationError::LineTooLong {
+            path: PathBuf::from("<genbank input>"),
+            len: content_len,
+            limit: MAX_LINE_LENGTH,
+        }
+        .into());
+    }
+    Ok(())
+}
+
+/// A parsed `GenBank` record containing only the fields needed for PCR analysis.
 pub struct GenbankRecord {
+    /// LOCUS name (first token of the LOCUS line), used as the sequence identifier.
     pub name: Option<String>,
+    /// Primary accession number from the ACCESSION line.
     pub accession: Option<String>,
+    /// Full organism/molecule description from the DEFINITION line(s).
     pub definition: Option<String>,
+    /// Whether the LOCUS line indicates circular topology.
     pub is_circular: bool,
+    /// Raw nucleotide sequence bytes extracted from the ORIGIN section.
     pub seq: Vec<u8>,
 }
 
@@ -20,7 +51,7 @@ pub struct GenbankRecord {
 pub struct GenbankReader<B: BufRead> {
     reader: B,
     line_buf: String,
-    /// True if we've already read a LOCUS line into line_buf for the next record.
+    /// True if we've already read a LOCUS line into `line_buf` for the next record.
     has_pending_locus: bool,
 }
 
@@ -29,7 +60,10 @@ impl<R: Read> GenbankReader<BufReader<R>> {
     pub fn new(reader: R) -> Self {
         Self {
             reader: BufReader::new(reader),
-            line_buf: String::new(),
+            // Pre-allocate to typical GenBank ORIGIN line width (~80 chars:
+            // 9-char line number + 6 groups of 10 bases + spaces) to avoid
+            // early reallocations during sequential line reads.
+            line_buf: String::with_capacity(80),
             has_pending_locus: false,
         }
     }
@@ -40,7 +74,8 @@ impl<B: BufRead> GenbankReader<B> {
     pub fn from_bufreader(reader: B) -> Self {
         Self {
             reader,
-            line_buf: String::new(),
+            // Pre-allocate to typical GenBank ORIGIN line width (~80 chars)
+            line_buf: String::with_capacity(80),
             has_pending_locus: false,
         }
     }
@@ -71,6 +106,7 @@ impl<B: BufRead> GenbankReader<B> {
                 if n == 0 {
                     return Ok(None); // EOF
                 }
+                check_line_length(&self.line_buf)?;
                 if self.line_buf.starts_with("LOCUS") {
                     break;
                 }
@@ -87,7 +123,9 @@ impl<B: BufRead> GenbankReader<B> {
         };
 
         // Parse LOCUS line
-        parse_locus_line(&self.line_buf, &mut record);
+        let (name, is_circular) = parse_locus_fields(self.line_buf.as_bytes());
+        record.name = name;
+        record.is_circular = is_circular;
 
         // Read subsequent lines until record terminator
         loop {
@@ -98,8 +136,13 @@ impl<B: BufRead> GenbankReader<B> {
                 .context("Failed to read GenBank data")?;
             if n == 0 {
                 // EOF mid-record — return what we have
+                log::warn!(
+                    "Truncated GenBank record '{}': EOF reached before record terminator '//'",
+                    record.name.as_deref().unwrap_or("<unnamed>")
+                );
                 break;
             }
+            check_line_length(&self.line_buf)?;
 
             let line = self.line_buf.trim_end();
 
@@ -120,7 +163,9 @@ impl<B: BufRead> GenbankReader<B> {
                     if n == 0 {
                         break;
                     }
-                    if !self.line_buf.starts_with(' ') || is_keyword(&self.line_buf) {
+                    check_line_length(&self.line_buf)?;
+                    if !self.line_buf.starts_with(' ') || is_keyword_bytes(self.line_buf.as_bytes())
+                    {
                         // Not a continuation — this line belongs to the next field
                         break;
                     }
@@ -189,45 +234,30 @@ impl<B: BufRead> GenbankReader<B> {
     }
 }
 
-/// Parse the LOCUS line to extract name and topology.
+/// Extract name and circularity from a LOCUS line (byte slice).
 ///
 /// Format: `LOCUS       name           len bp    mol  topology division`
 /// The name field starts at column 12 and extends to the first whitespace.
 /// Topology is either "circular" or "linear" somewhere on the line.
-fn parse_locus_line(line: &str, record: &mut GenbankRecord) {
-    // Extract name: starts at column 12, ends at next whitespace
-    if let Some(name) = line
-        .get(12..)
-        .and_then(|r| r.split_whitespace().next())
-        .filter(|n| !n.is_empty())
-    {
-        record.name = Some(name.to_string());
-    }
-
-    // Check for circular topology (case-insensitive)
-    let lower = line.to_ascii_lowercase();
-    record.is_circular = lower.contains("circular");
-}
-
-/// Check if a line starts with a known GenBank top-level keyword.
-/// Used to detect the end of continuation lines.
-fn is_keyword(line: &str) -> bool {
-    const KEYWORDS: &[&str] = &[
-        "LOCUS",
-        "DEFINITION",
-        "ACCESSION",
-        "VERSION",
-        "DBLINK",
-        "KEYWORDS",
-        "SOURCE",
-        "REFERENCE",
-        "COMMENT",
-        "FEATURES",
-        "BASE COUNT",
-        "ORIGIN",
-        "CONTIG",
-    ];
-    KEYWORDS.iter().any(|kw| line.starts_with(kw))
+///
+/// Used by both the streaming and slice-based parser paths.
+fn parse_locus_fields(line: &[u8]) -> (Option<String>, bool) {
+    let name = if line.len() > 12 {
+        let rest = &line[12..];
+        let name_end = rest
+            .iter()
+            .position(|&b| b == b' ' || b == b'\t')
+            .unwrap_or(rest.len());
+        if name_end > 0 {
+            Some(String::from_utf8_lossy(&rest[..name_end]).into_owned())
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let is_circular = line.windows(8).any(|w| w.eq_ignore_ascii_case(b"circular"));
+    (name, is_circular)
 }
 
 /// Read sequence data from ORIGIN section until `//`, `LOCUS`, or EOF.
@@ -244,8 +274,12 @@ fn read_origin_sequence<B: BufRead>(
             .read_line(line_buf)
             .context("Failed to read GenBank sequence data")?;
         if n == 0 {
+            log::warn!(
+                "Truncated GenBank record: EOF reached in ORIGIN section before record terminator '//'",
+            );
             return Ok(false); // EOF
         }
+        check_line_length(line_buf)?;
         let trimmed = line_buf.trim();
         if trimmed == "//" {
             return Ok(false);
@@ -268,12 +302,13 @@ fn read_origin_sequence<B: BufRead>(
 
 use memchr::memmem;
 
-/// Parse all GenBank records from an in-memory byte slice.
+/// Parse all `GenBank` records from an in-memory byte slice.
 ///
 /// This is a fast path that operates directly on `&[u8]` without
 /// `BufReader`/`read_line` overhead. It uses `memchr::memmem` to find record
 /// boundaries (`\nLOCUS`) and jump directly to `\nORIGIN`, skipping FEATURES
 /// entirely.
+#[must_use]
 pub fn parse_genbank_slice(data: &[u8]) -> Vec<GenbankRecord> {
     if data.is_empty() {
         return Vec::new();
@@ -305,19 +340,14 @@ pub fn parse_genbank_slice(data: &[u8]) -> Vec<GenbankRecord> {
             data.len()
         };
         let slice = &data[start..end];
-        if let Some(rec) = parse_single_record_slice(slice, &origin_finder) {
-            records.push(rec);
-        }
+        records.push(parse_single_record_slice(slice, &origin_finder));
     }
 
     records
 }
 
-/// Parse a single GenBank record from a byte slice that starts with `LOCUS`.
-fn parse_single_record_slice(
-    data: &[u8],
-    origin_finder: &memmem::FinderRev,
-) -> Option<GenbankRecord> {
+/// Parse a single `GenBank` record from a byte slice that starts with `LOCUS`.
+fn parse_single_record_slice(data: &[u8], origin_finder: &memmem::FinderRev) -> GenbankRecord {
     let mut record = GenbankRecord {
         name: None,
         accession: None,
@@ -329,7 +359,9 @@ fn parse_single_record_slice(
     // Find the end of the LOCUS line.
     let locus_end = memchr::memchr(b'\n', data).unwrap_or(data.len());
     let locus_line = &data[..locus_end];
-    parse_locus_line_bytes(locus_line, &mut record);
+    let (name, is_circular) = parse_locus_fields(locus_line);
+    record.name = name;
+    record.is_circular = is_circular;
 
     // Use rfind to locate ORIGIN from the end of the record — this skips over
     // FEATURES (typically the largest section) instead of scanning through it.
@@ -350,20 +382,18 @@ fn parse_single_record_slice(
             opos + 1 + memchr::memchr(b'\n', &data[opos + 1..]).unwrap_or(data[opos + 1..].len());
         let seq_region = &data[origin_line_end..];
         // Find the record terminator "//" within the sequence region.
-        let term_pos = memmem::find(seq_region, b"\n//")
-            .map(|p| p + 1) // include the newline, stop before "//"
-            .unwrap_or(seq_region.len());
+        let term_pos = memmem::find(seq_region, b"\n//").map_or(seq_region.len(), |p| p + 1);
         extract_origin_fast(&seq_region[..term_pos], &mut record.seq);
     }
 
-    Some(record)
+    record
 }
 
 /// Find where the header section ends (before FEATURES or ORIGIN).
 /// If `origin_pos` is known, uses it as an upper bound to avoid scanning into FEATURES.
 fn find_header_end(data: &[u8], after_locus: usize, origin_pos: Option<usize>) -> usize {
     // If we know where ORIGIN is, limit the scan region.
-    let limit = origin_pos.map(|p| p + 1).unwrap_or(data.len());
+    let limit = origin_pos.map_or(data.len(), |p| p + 1);
     // Scan line-by-line from after the LOCUS line.
     let mut pos = after_locus + 1;
     while pos < limit {
@@ -380,25 +410,6 @@ fn find_header_end(data: &[u8], after_locus: usize, origin_pos: Option<usize>) -
         }
     }
     limit
-}
-
-/// Parse the LOCUS line from raw bytes.
-fn parse_locus_line_bytes(line: &[u8], record: &mut GenbankRecord) {
-    // Name starts at column 12.
-    if line.len() > 12 {
-        let rest = &line[12..];
-        // Find end of name (next whitespace).
-        let name_end = rest
-            .iter()
-            .position(|&b| b == b' ' || b == b'\t')
-            .unwrap_or(rest.len());
-        if name_end > 0 {
-            record.name = Some(String::from_utf8_lossy(&rest[..name_end]).into_owned());
-        }
-    }
-
-    // Case-insensitive circular check using byte windows.
-    record.is_circular = line.windows(8).any(|w| w.eq_ignore_ascii_case(b"circular"));
 }
 
 /// Parse DEFINITION and ACCESSION from the header portion (bytes between LOCUS and FEATURES/ORIGIN).
@@ -490,12 +501,11 @@ fn trim_bytes(data: &[u8]) -> &[u8] {
     let end = data
         .iter()
         .rposition(|b| !b.is_ascii_whitespace())
-        .map(|p| p + 1)
-        .unwrap_or(start);
+        .map_or(start, |p| p + 1);
     &data[start..end]
 }
 
-/// Check if a byte line starts with a known GenBank top-level keyword.
+/// Check if a byte line starts with a known `GenBank` top-level keyword.
 fn is_keyword_bytes(line: &[u8]) -> bool {
     const KEYWORDS: &[&[u8]] = &[
         b"LOCUS",
@@ -934,15 +944,17 @@ ORIGIN
 
     #[test]
     fn test_large_sequence_many_origin_lines() {
+        use std::fmt::Write;
         // Build a GenBank record with 600bp of sequence (10 ORIGIN lines)
         let seq_chunk = "acgtacgtac"; // 10 bases
         let mut gb = String::from("LOCUS       Big 600 bp DNA linear UNK\nORIGIN\n");
         let mut pos = 1;
         for _ in 0..10 {
-            gb.push_str(&format!(
-                "{:>9} {} {} {} {} {} {}\n",
-                pos, seq_chunk, seq_chunk, seq_chunk, seq_chunk, seq_chunk, seq_chunk
-            ));
+            writeln!(
+                gb,
+                "{pos:>9} {seq_chunk} {seq_chunk} {seq_chunk} {seq_chunk} {seq_chunk} {seq_chunk}"
+            )
+            .unwrap();
             pos += 60;
         }
         gb.push_str("//\n");
@@ -951,7 +963,7 @@ ORIGIN
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].seq.len(), 600);
         // All bases should be alphabetic
-        assert!(records[0].seq.iter().all(|b| b.is_ascii_alphabetic()));
+        assert!(records[0].seq.iter().all(u8::is_ascii_alphabetic));
     }
 
     #[test]
@@ -993,6 +1005,34 @@ ORIGIN
         assert_eq!(records.len(), 2);
         assert_eq!(records[0].name.as_deref(), Some("R1"));
         assert_eq!(records[1].name.as_deref(), Some("R2"));
+    }
+
+    #[test]
+    fn test_max_line_length_enforced() {
+        // A GenBank "file" with a line exceeding MAX_LINE_LENGTH
+        let long_line = "A".repeat(MAX_LINE_LENGTH + 1);
+        let gb = format!("LOCUS       S1 4 bp DNA linear UNK\n{long_line}\n//\n");
+        let reader = GenbankReader::new(Cursor::new(gb.as_bytes()));
+        let results: Vec<_> = reader.collect();
+        // Should have an error for the long line
+        assert!(
+            results.iter().any(std::result::Result::is_err),
+            "Should reject line exceeding MAX_LINE_LENGTH"
+        );
+    }
+
+    #[test]
+    fn test_max_line_length_ok_at_limit() {
+        // Line exactly at MAX_LINE_LENGTH should be OK
+        let line = "A".repeat(MAX_LINE_LENGTH);
+        let gb = format!("LOCUS       S1 4 bp DNA linear UNK\n{line}\n//\n");
+        let reader = GenbankReader::new(Cursor::new(gb.as_bytes()));
+        let results: Vec<_> = reader.collect();
+        // All should be Ok (no error)
+        assert!(
+            results.iter().all(std::result::Result::is_ok),
+            "Line at exactly MAX_LINE_LENGTH should be accepted"
+        );
     }
 
     // ========================================================================
@@ -1161,5 +1201,264 @@ ORIGIN
             std::str::from_utf8(&records[0].seq).unwrap(),
             "acgtacgtacgtacgtacgtttttggggaaaacccctttt"
         );
+    }
+
+    // ========================================================================
+    // Parity tests: verify streaming and slice parsers produce identical output
+    // ========================================================================
+
+    /// Assert that streaming and slice parsers produce field-by-field identical
+    /// records for the given input bytes.
+    fn assert_parser_parity(input: &[u8]) {
+        // Streaming path
+        let streaming: Vec<GenbankRecord> = GenbankReader::new(Cursor::new(input))
+            .collect::<Result<Vec<_>>>()
+            .expect("streaming parser should not error");
+        // Slice path
+        let sliced = parse_genbank_slice(input);
+
+        assert_eq!(
+            streaming.len(),
+            sliced.len(),
+            "Record count mismatch: streaming={}, slice={}",
+            streaming.len(),
+            sliced.len()
+        );
+
+        for (i, (s, sl)) in streaming.iter().zip(sliced.iter()).enumerate() {
+            assert_eq!(s.name, sl.name, "Record {i}: name mismatch");
+            assert_eq!(s.accession, sl.accession, "Record {i}: accession mismatch");
+            assert_eq!(
+                s.definition, sl.definition,
+                "Record {i}: definition mismatch"
+            );
+            assert_eq!(
+                s.is_circular, sl.is_circular,
+                "Record {i}: circular mismatch"
+            );
+            assert_eq!(s.seq, sl.seq, "Record {i}: sequence mismatch");
+        }
+    }
+
+    #[test]
+    fn parity_realistic_record() {
+        let input = b"\
+LOCUS       AB012345             2400 bp    DNA     circular BCT 01-JAN-2020
+DEFINITION  Escherichia coli strain K-12 16S ribosomal RNA gene, partial
+            sequence.
+ACCESSION   AB012345
+VERSION     AB012345.1
+DBLINK      BioProject: PRJNA12345
+KEYWORDS    16S rRNA.
+SOURCE      Escherichia coli
+  ORGANISM  Escherichia coli
+            Bacteria; Proteobacteria; Gammaproteobacteria; Enterobacterales;
+            Enterobacteriaceae; Escherichia.
+REFERENCE   1  (bases 1 to 2400)
+  AUTHORS   Smith,J. and Doe,A.
+  TITLE     Some Paper Title
+  JOURNAL   J. Bacteriol. 200 (1), 1-10 (2020)
+   PUBMED   12345678
+COMMENT     This is a comment that spans
+            multiple lines.
+FEATURES             Location/Qualifiers
+     source          1..2400
+                     /organism=\"Escherichia coli\"
+                     /mol_type=\"genomic DNA\"
+                     /strain=\"K-12\"
+     gene            1..2400
+                     /gene=\"16S rRNA\"
+     rRNA            1..2400
+                     /gene=\"16S rRNA\"
+                     /product=\"16S ribosomal RNA\"
+ORIGIN
+        1 acgtacgtac gtacgtacgt
+       21 ttttggggaa aacccctttt
+//
+";
+        assert_parser_parity(input);
+    }
+
+    #[test]
+    fn parity_multi_record() {
+        let input = b"\
+LOCUS       Linear1 4 bp DNA linear UNK
+DEFINITION  First linear record.
+ACCESSION   LIN001
+ORIGIN
+        1 aaaa
+//
+LOCUS       Circ1 4 bp DNA circular UNK
+DEFINITION  Second circular record.
+ACCESSION   CIR001
+ORIGIN
+        1 cccc
+//
+";
+        assert_parser_parity(input);
+    }
+
+    #[test]
+    fn parity_no_origin() {
+        let input = b"\
+LOCUS       NoOrig 0 bp DNA linear UNK
+DEFINITION  Record without ORIGIN section.
+//
+";
+        assert_parser_parity(input);
+    }
+
+    #[test]
+    fn parity_truncated_eof() {
+        // Record terminated by EOF instead of //
+        let input = b"\
+LOCUS       TruncEOF 4 bp DNA linear UNK
+DEFINITION  Truncated record.
+ACCESSION   TRUNC001
+ORIGIN
+        1 acgt
+";
+        assert_parser_parity(input);
+    }
+
+    #[test]
+    fn parity_missing_terminator() {
+        // Two consecutive LOCUS lines without // between them
+        let input = b"\
+LOCUS       First 4 bp DNA linear UNK
+ORIGIN
+        1 aaaa
+LOCUS       Second 4 bp DNA circular UNK
+ORIGIN
+        1 cccc
+//
+";
+        assert_parser_parity(input);
+    }
+
+    #[test]
+    fn parity_definition_continuation() {
+        // DEFINITION spanning 3+ continuation lines
+        let input = b"\
+LOCUS       DefCont 4 bp DNA linear UNK
+DEFINITION  This is a very long definition that spans
+            multiple continuation lines in the GenBank
+            format, which is quite common for detailed
+            sequence descriptions.
+ACCESSION   DEF001
+ORIGIN
+        1 acgt
+//
+";
+        assert_parser_parity(input);
+    }
+
+    #[test]
+    fn parity_empty_input() {
+        assert_parser_parity(b"");
+    }
+
+    #[test]
+    fn parity_minimal_record() {
+        // Just LOCUS + ORIGIN + //
+        let input = b"\
+LOCUS       MinRec 4 bp DNA linear UNK
+ORIGIN
+        1 acgt
+//
+";
+        assert_parser_parity(input);
+    }
+
+    #[test]
+    fn parity_features_between_header_and_origin() {
+        // FEATURES section with gene/CDS annotations between ACCESSION and ORIGIN
+        let input = b"\
+LOCUS       FeatRec 8 bp DNA linear UNK
+DEFINITION  Record with features.
+ACCESSION   FEAT001
+FEATURES             Location/Qualifiers
+     gene            1..8
+                     /gene=\"testGene\"
+     CDS             1..6
+                     /product=\"hypothetical protein\"
+                     /translation=\"MK\"
+ORIGIN
+        1 acgtacgt
+//
+";
+        assert_parser_parity(input);
+    }
+
+    #[test]
+    fn parity_accession_before_definition() {
+        // Non-standard field order
+        let input = b"\
+LOCUS       RevOrder 4 bp DNA linear UNK
+ACCESSION   REV001
+DEFINITION  Definition after accession.
+ORIGIN
+        1 acgt
+//
+";
+        assert_parser_parity(input);
+    }
+
+    #[test]
+    fn test_definition_then_locus_no_terminator() {
+        // DEFINITION continuation stops at LOCUS (no ORIGIN, no //)
+        // This exercises the `has_pending_locus` branch after DEFINITION parsing
+        let gb = "\
+LOCUS       First 0 bp DNA linear UNK
+DEFINITION  First record definition.
+LOCUS       Second 4 bp DNA linear UNK
+ORIGIN
+        1 acgt
+//
+";
+        let records = parse_all(gb);
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].name.as_deref(), Some("First"));
+        assert_eq!(
+            records[0].definition.as_deref(),
+            Some("First record definition.")
+        );
+        assert!(records[0].seq.is_empty());
+        assert_eq!(records[1].name.as_deref(), Some("Second"));
+        assert_eq!(records[1].seq, b"acgt");
+    }
+
+    #[test]
+    fn parity_definition_then_locus_no_terminator() {
+        let input = b"\
+LOCUS       First 0 bp DNA linear UNK
+DEFINITION  First record definition.
+LOCUS       Second 4 bp DNA linear UNK
+ORIGIN
+        1 acgt
+//
+";
+        assert_parser_parity(input);
+    }
+
+    #[test]
+    fn test_definition_multiline_then_origin() {
+        // Multi-line DEFINITION followed directly by ORIGIN (no ACCESSION)
+        let gb = "\
+LOCUS       S1 4 bp DNA linear UNK
+DEFINITION  First line of definition
+            second line of definition
+            third line of definition.
+ORIGIN
+        1 acgt
+//
+";
+        let records = parse_all(gb);
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0].definition.as_deref(),
+            Some("First line of definition second line of definition third line of definition.")
+        );
+        assert_eq!(records[0].seq, b"acgt");
     }
 }

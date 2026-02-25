@@ -100,6 +100,50 @@ Mixed formats are also supported via glob patterns -- unrecognized file types ar
 amplirust -i "data/*" -p primers.csv -o products.fasta
 ```
 
+## Primer Pool Mode (Multiplex Screening)
+
+Find products between any combination of primers from a pool:
+
+```bash
+# Basic pool mode with inline primers
+amplirust --pool \
+  -i genome.fasta \
+  -p "27F:AGAGTTTGATCMTGGCTCAG;519R:GWATTACCGCGGCKGCTG;1492R:TACGGYTACCTTGTTACGACTT" \
+  -o products.fasta
+```
+
+Pool mode with a CSV file:
+
+```bash
+# CSV with 2 columns: name,sequence
+amplirust --pool \
+  -i bacterial_genomes/*.fasta \
+  -p pool_primers.csv \
+  -k 2 \
+  -o pool_products.fasta \
+  --tsv pool_stats.tsv
+```
+
+Allow self-matching (same primer as both forward and reverse):
+
+```bash
+amplirust --pool --pool-self-match \
+  -i genome.fasta \
+  -p "IR:CCTGCAGGCATGCAAGCTT" \
+  -o self_products.fasta
+```
+
+Pool mode combined with circular genome search:
+
+```bash
+amplirust --pool \
+  -i plasmid.fasta \
+  -p pool_primers.csv \
+  --circular \
+  --search-rc \
+  -o plasmid_pool_products.fasta
+```
+
 ## TSV Analysis Workflow
 
 Export detailed statistics and analyze with standard tools:

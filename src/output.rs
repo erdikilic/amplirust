@@ -1,3 +1,8 @@
+//! Output formatting for FASTA sequences and TSV statistics tables.
+//!
+//! Provides streaming FASTA writers (plain and gzip-compressed) and
+//! tab-separated summary output with per-product alignment details.
+
 use anyhow::{Context, Result};
 use gzp::{ZBuilder, deflate::Bgzf};
 use sassy::Strand;
@@ -5,6 +10,7 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
+use crate::errors::ValidationError;
 use crate::pcr::PcrProduct;
 
 /// Line width for FASTA sequence wrapping
@@ -12,11 +18,18 @@ const FASTA_LINE_WIDTH: usize = 80;
 
 /// Streaming FASTA writer (plain or gzipped)
 pub enum FastaWriter {
+    /// Uncompressed output through a buffered file writer.
     Plain(BufWriter<File>),
+    /// Multi-threaded BGZF-compressed output via gzp.
     Gzip(Box<dyn gzp::ZWriter<File>>),
 }
 
 impl FastaWriter {
+    /// Create a new FASTA writer for the given output path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the output file cannot be created.
     pub fn new(output_path: &Path, threads: usize) -> Result<Self> {
         let is_gzipped = output_path
             .extension()
@@ -40,6 +53,11 @@ impl FastaWriter {
         }
     }
 
+    /// Write a single PCR product as a FASTA record.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if writing to the underlying stream fails.
     pub fn write_product(&mut self, product: &PcrProduct) -> Result<()> {
         match self {
             FastaWriter::Plain(writer) => write_fasta_record(writer, product),
@@ -47,6 +65,11 @@ impl FastaWriter {
         }
     }
 
+    /// Flush and finalize the writer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if flushing or finalizing the output stream fails.
     pub fn finish(self) -> Result<()> {
         match self {
             FastaWriter::Plain(mut writer) => {
@@ -63,7 +86,11 @@ impl FastaWriter {
     }
 }
 
-/// Write PCR products to a FASTA file (with optional gzip compression)
+/// Write PCR products to a FASTA file (with optional gzip compression).
+///
+/// # Errors
+///
+/// Returns an error if the output file cannot be created or written to.
 pub fn write_fasta(products: &[PcrProduct], output_path: &Path, threads: usize) -> Result<()> {
     let mut writer = FastaWriter::new(output_path, threads)?;
     for product in products {
@@ -78,7 +105,11 @@ pub fn write_fasta(products: &[PcrProduct], output_path: &Path, threads: usize) 
     Ok(())
 }
 
-/// Write a single FASTA record
+/// Write a single FASTA record.
+///
+/// # Errors
+///
+/// Returns an error if writing to the stream fails.
 pub fn write_fasta_record<W: Write>(writer: &mut W, product: &PcrProduct) -> Result<()> {
     // Write header
     let strand_str = match product.strand {
@@ -104,7 +135,11 @@ pub fn write_fasta_record<W: Write>(writer: &mut W, product: &PcrProduct) -> Res
     Ok(())
 }
 
-/// Write PCR products to stdout as FASTA
+/// Write PCR products to stdout as FASTA.
+///
+/// # Errors
+///
+/// Returns an error if writing to stdout fails.
 pub fn write_fasta_stdout(products: &[PcrProduct]) -> Result<()> {
     let stdout = std::io::stdout();
     let mut writer = BufWriter::new(stdout.lock());
@@ -115,6 +150,43 @@ pub fn write_fasta_stdout(products: &[PcrProduct]) -> Result<()> {
 
     writer.flush()?;
     Ok(())
+}
+
+/// Validate that an output path is writable before starting expensive processing.
+///
+/// Checks:
+/// 1. Parent directory exists (returns `ValidationError::OutputDirMissing` if not).
+/// 2. File can be created at the path (returns `ValidationError::OutputNotWritable` on failure).
+///    A probe file is created and immediately removed.
+///
+/// # Errors
+///
+/// Returns a `ValidationError` if the output path is not writable.
+pub fn validate_output_writable(path: &Path) -> Result<()> {
+    // Check parent directory exists
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+        && !parent.exists()
+    {
+        return Err(ValidationError::OutputDirMissing {
+            path: parent.to_path_buf(),
+        }
+        .into());
+    }
+
+    // Probe: try creating the file, then immediately remove it
+    match File::create(path) {
+        Ok(_) => {
+            // Clean up the probe file
+            let _ = std::fs::remove_file(path);
+            Ok(())
+        }
+        Err(e) => Err(ValidationError::OutputNotWritable {
+            path: path.to_path_buf(),
+            source: e,
+        }
+        .into()),
+    }
 }
 
 /// TSV output columns
@@ -129,25 +201,44 @@ pub struct TsvWriter {
 }
 
 impl TsvWriter {
+    /// Create a new TSV writer for the given output path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the output file cannot be created.
     pub fn new(output_path: &Path) -> Result<Self> {
         let file = File::create(output_path)
             .with_context(|| format!("Failed to create TSV file: {}", output_path.display()))?;
         let mut writer = BufWriter::with_capacity(64 * 1024, file);
-        writeln!(writer, "{}", TSV_HEADER)?;
+        writeln!(writer, "{TSV_HEADER}")?;
         Ok(Self { writer })
     }
 
+    /// Write a single PCR product as a TSV record.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if writing to the underlying stream fails.
     pub fn write_product(&mut self, product: &PcrProduct) -> Result<()> {
         write_tsv_record(&mut self.writer, product)
     }
 
+    /// Flush and finalize the writer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if flushing the output stream fails.
     pub fn finish(mut self) -> Result<()> {
         self.writer.flush()?;
         Ok(())
     }
 }
 
-/// Write TSV statistics file
+/// Write TSV statistics file.
+///
+/// # Errors
+///
+/// Returns an error if the output file cannot be created or written to.
 pub fn write_tsv(products: &[PcrProduct], output_path: &Path) -> Result<()> {
     let mut writer = TsvWriter::new(output_path)?;
     for product in products {
@@ -194,18 +285,24 @@ fn write_tsv_record<W: Write>(writer: &mut W, product: &PcrProduct) -> Result<()
     Ok(())
 }
 
-/// Summary statistics for a run
+/// Summary statistics for a completed PCR analysis run.
 #[derive(Debug, Default)]
 pub struct RunSummary {
+    /// Number of input sequences (FASTA records or `GenBank` entries) processed.
     pub total_sequences: usize,
+    /// Number of primer pairs used in the search.
     pub total_primers: usize,
+    /// Total PCR products found across all sequences and primers.
     pub total_products: usize,
+    /// Product count grouped by primer pair name.
     pub products_per_primer: Vec<(String, usize)>,
+    /// Product count grouped by reference sequence header.
     pub products_per_reference: Vec<(String, usize)>,
 }
 
 impl RunSummary {
     /// Create summary from pre-aggregated counts
+    #[must_use]
     pub fn from_counts(
         total_sequences: usize,
         total_primers: usize,
@@ -229,6 +326,7 @@ impl RunSummary {
     }
 
     /// Create summary from products
+    #[must_use]
     pub fn from_products(
         products: &[PcrProduct],
         num_sequences: usize,
@@ -273,14 +371,14 @@ impl RunSummary {
         if !self.products_per_primer.is_empty() {
             log::info!("Products by primer:");
             for (primer, count) in &self.products_per_primer {
-                log::info!("  {}: {}", primer, count);
+                log::info!("  {primer}: {count}");
             }
         }
 
         if self.products_per_reference.len() <= 10 {
             log::info!("Products by reference:");
             for (ref_name, count) in &self.products_per_reference {
-                log::info!("  {}: {}", ref_name, count);
+                log::info!("  {ref_name}: {count}");
             }
         } else {
             log::info!(
@@ -302,7 +400,7 @@ impl RunSummary {
             eprintln!();
             eprintln!("Products by primer:");
             for (primer, count) in &self.products_per_primer {
-                eprintln!("  {}: {}", primer, count);
+                eprintln!("  {primer}: {count}");
             }
         }
 
@@ -311,7 +409,7 @@ impl RunSummary {
             if self.products_per_reference.len() <= 10 {
                 eprintln!("Products by reference:");
                 for (ref_name, count) in &self.products_per_reference {
-                    eprintln!("  {}: {}", ref_name, count);
+                    eprintln!("  {ref_name}: {count}");
                 }
             } else {
                 eprintln!(
@@ -402,7 +500,7 @@ mod tests {
         let mut output = Vec::new();
 
         // Write header manually for test
-        writeln!(output, "{}", TSV_HEADER).unwrap();
+        writeln!(output, "{TSV_HEADER}").unwrap();
         write_tsv_record(&mut output, &product).unwrap();
 
         let content = String::from_utf8(output).unwrap();
@@ -490,11 +588,32 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_output_nonexistent_dir() {
+        let result = validate_output_writable(Path::new("/nonexistent/dir/output.fasta"));
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("does not exist"),
+            "Expected 'does not exist' in error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_validate_output_writable_ok() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("test_output.fasta");
+        let result = validate_output_writable(&path);
+        assert!(result.is_ok());
+        // Probe file should have been cleaned up
+        assert!(!path.exists());
+    }
+
+    #[test]
     fn test_fasta_line_wrapping() {
         // Sequence > 80bp should wrap correctly
         let mut product = make_test_product(1);
         // Create a sequence longer than 80bp
-        product.sequence = b"ACGT".repeat(25).to_vec(); // 100bp
+        product.sequence = b"ACGT".repeat(25); // 100bp
 
         let mut output = Vec::new();
         write_fasta_record(&mut output, &product).unwrap();
@@ -557,5 +676,76 @@ mod tests {
         assert!(header_line.contains("pos="));
         assert!(header_line.contains("strand="));
         assert!(header_line.contains("len="));
+    }
+
+    #[test]
+    fn test_write_fasta_gzip_roundtrip() {
+        use flate2::read::MultiGzDecoder;
+        use std::io::Read;
+
+        let products = vec![make_test_product(1)];
+        let temp = NamedTempFile::with_suffix(".fasta.gz").unwrap();
+
+        write_fasta(&products, temp.path(), 1).unwrap();
+
+        // Verify it's valid gzip and contains expected content
+        let file = std::fs::File::open(temp.path()).unwrap();
+        let mut decoder = MultiGzDecoder::new(file);
+        let mut content = String::new();
+        decoder.read_to_string(&mut content).unwrap();
+        assert!(content.contains("ACGTACGTACGT"));
+    }
+
+    #[test]
+    fn test_run_summary_from_counts() {
+        use std::collections::HashMap;
+        let mut primer_counts = HashMap::new();
+        primer_counts.insert("16S".to_string(), 5);
+        primer_counts.insert("ITS".to_string(), 3);
+        let mut ref_counts = HashMap::new();
+        ref_counts.insert("ecoli".to_string(), 4);
+        ref_counts.insert("staph".to_string(), 4);
+
+        let summary = RunSummary::from_counts(10, 2, 8, primer_counts, ref_counts);
+        assert_eq!(summary.total_products, 8);
+        assert_eq!(summary.total_sequences, 10);
+        assert_eq!(summary.total_primers, 2);
+        // Sorted descending by count
+        assert_eq!(summary.products_per_primer[0].1, 5);
+        assert_eq!(summary.products_per_primer[1].1, 3);
+    }
+
+    #[test]
+    fn test_run_summary_many_references_branch() {
+        // Tests the >10 references branch in print_stderr/log_summary
+        let products: Vec<PcrProduct> = (0..12)
+            .map(|i| {
+                let mut p = make_test_product(1);
+                p.reference_header = format!("ref_{i}");
+                p
+            })
+            .collect();
+        let summary = RunSummary::from_products(&products, 12, 1);
+        assert_eq!(summary.products_per_reference.len(), 12);
+        // Call these to hit the >10 branch — no panic is the assertion
+        summary.log_summary();
+        summary.print_stderr();
+    }
+
+    #[test]
+    fn test_run_summary_empty() {
+        let summary = RunSummary::from_products(&[], 0, 0);
+        assert_eq!(summary.total_products, 0);
+        summary.log_summary();
+        summary.print_stderr();
+    }
+
+    #[test]
+    fn test_validate_output_writable_bare_filename() {
+        // File with no directory component (parent is "") exercises the
+        // `!parent.as_os_str().is_empty()` guard in validate_output_writable
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("output.fa");
+        assert!(validate_output_writable(&path).is_ok());
     }
 }

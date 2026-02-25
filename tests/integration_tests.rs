@@ -24,7 +24,7 @@ fn test_load_fasta() {
 
     let mut sequences = Vec::new();
     for file in &files {
-        let mut records = read_sequences_from_file(file).unwrap();
+        let mut records = read_sequences_from_file(file, 0).unwrap();
         sequences.append(&mut records);
     }
     assert_eq!(sequences.len(), 3);
@@ -232,7 +232,7 @@ fn test_output_fasta() {
 
         // Verify file was created and has content
         let content = std::fs::read_to_string(&output_path).unwrap();
-        assert!(content.contains(">"));
+        assert!(content.contains('>'));
         assert!(content.len() > 10);
     }
 }
@@ -420,7 +420,7 @@ fn test_gzip_output_readable() {
 
     // Verify content is valid FASTA
     assert!(
-        content.contains(">"),
+        content.contains('>'),
         "Decompressed content should have FASTA header"
     );
     assert!(

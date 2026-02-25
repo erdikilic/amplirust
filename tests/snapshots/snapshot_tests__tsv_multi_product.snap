@@ -1,0 +1,8 @@
+---
+source: tests/snapshot_tests.rs
+expression: content
+---
+amplicon_id	reference_id	source_file	primer_name	product_len	full_len	fwd_start	fwd_end	fwd_mismatches	fwd_identity	fwd_cigar	rev_start	rev_end	rev_mismatches	rev_identity	rev_cigar	strand	is_circular_wrap	product_seq
+NZ_CP012345.1:27F_1492R:1	NZ_CP012345.1 Escherichia coli strain K-12	test_genome.fasta	27F_1492R	20	20	100	120	0	1.0000	20=	110	120	1	0.9000	9=1X	+	false	AGAGTTTGATCATGGCTCAG
+NZ_CP012345.1:27F_1492R_rc:2	NZ_CP012345.1 Escherichia coli strain K-12	test_genome.fasta	27F_1492R	20	20	100	120	0	1.0000	20=	110	120	1	0.9000	9=1X	-	false	AGAGTTTGATCATGGCTCAG
+NZ_CP012345.1:27F_1492R_wrap:1	NZ_CP012345.1 Escherichia coli strain K-12	test_genome.fasta	27F_1492R	20	20	4990	5010	0	1.0000	20=	5000	5010	1	0.9000	9=1X	+	true	AGAGTTTGATCATGGCTCAG

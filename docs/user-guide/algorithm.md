@@ -50,6 +50,23 @@ The core PCR algorithm works as follows:
 !!! note "Reverse primer orientation"
     The reverse primer is specified in 5'-to-3' direction (as you would order it). Amplirust internally converts it to its reverse complement to search for the binding site on the forward strand.
 
+## Pool Mode (All-vs-All)
+
+When `--pool` is enabled, Amplirust searches a pool of individual primers rather than predefined forward/reverse pairs. The algorithm:
+
+1. **Search phase** -- O(2N) searches for N primers:
+    - Search each primer in forward orientation against the sequence
+    - Search the reverse complement of each primer against the sequence
+
+2. **Pairing phase** -- combinatorial matching on in-memory results:
+    - For each forward match of primer_i at position X and each RC match of primer_j at position Y (where Y > X):
+        - Calculate product length and apply length/N-fraction filters
+        - By default, i != j (different primers). Use `--pool-self-match` to allow i == j.
+
+3. **Output** -- product names use `primerA+primerB` format (e.g., `27F+1492R`)
+
+Circular genome support (`--circular`) and reverse complement strand search (`--search-rc`) work the same as pair mode.
+
 ## Circular Genome Handling
 
 When `--circular` is enabled, Amplirust extends the sequence to detect products that wrap around the origin of replication.

@@ -1,0 +1,8 @@
+# Mutation testing configuration for amplirust
+# Exclude mutations in display/debug implementations and CLI entrypoint
+exclude_re = [
+    "impl Debug",
+    "impl Display",
+    "fn main",
+    "init_logging",
+]

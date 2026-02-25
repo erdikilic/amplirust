@@ -1,3 +1,8 @@
+//! Sequence input handling: format detection, gzip decompression, and file expansion.
+//!
+//! Supports FASTA and GenBank formats, with automatic gzip/BGZF detection.
+//! Provides both batch (in-memory) and streaming parsers.
+
 use anyhow::{Context, Result, bail};
 use flate2::read::MultiGzDecoder;
 use gzp::deflate::Bgzf;
@@ -5,6 +10,17 @@ use gzp::par::decompress::ParDecompressBuilder;
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
+
+use crate::errors::ValidationError;
+
+/// Uppercase a sequence in-place, but only if it contains lowercase bytes.
+/// Most NCBI sequences are already uppercase, so the scan is a fast early exit.
+#[inline]
+fn ensure_uppercase(seq: &mut [u8]) {
+    if seq.iter().any(u8::is_ascii_lowercase) {
+        seq.make_ascii_uppercase();
+    }
+}
 
 /// A sequence record from FASTA input
 #[derive(Debug, Clone)]
@@ -20,13 +36,16 @@ pub struct SequenceRecord {
 /// Supported input file formats
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum InputFormat {
+    /// FASTA format (plain or gzipped), detected by `.fa`, `.fasta`, `.fna`, etc.
     Fasta,
+    /// `GenBank` flat-file format, detected by `.gb`, `.gbk`, `.genbank`, etc.
     Genbank,
 }
 
 /// Detect the input format from file extension.
 /// Returns `None` for unrecognized extensions.
 /// Strips `.gz` suffix before checking the inner extension.
+#[must_use]
 pub fn detect_format(path: &Path) -> Option<InputFormat> {
     // Strip .gz if present to get to the real extension
     let path = if is_gzipped(path) {
@@ -43,8 +62,14 @@ pub fn detect_format(path: &Path) -> Option<InputFormat> {
     }
 }
 
-/// Expand input patterns to a list of files
-/// Supports: single files, comma-separated lists, glob patterns
+/// Expand input patterns to a list of files.
+///
+/// Supports: single files, comma-separated lists, glob patterns.
+///
+/// # Errors
+///
+/// Returns an error if no valid input files are found, or if a file path
+/// does not exist.
 pub fn expand_input_patterns(patterns: &[String]) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
 
@@ -57,16 +82,16 @@ pub fn expand_input_patterns(patterns: &[String]) -> Result<Vec<PathBuf>> {
         // Check if it's a glob pattern
         if pattern.contains('*') || pattern.contains('?') || pattern.contains('[') {
             let matches: Vec<_> = glob::glob(pattern)
-                .with_context(|| format!("Invalid glob pattern: {}", pattern))?
+                .with_context(|| format!("Invalid glob pattern: {pattern}"))?
                 .collect();
 
             if matches.is_empty() {
-                log::warn!("Glob pattern '{}' matched no files", pattern);
+                log::warn!("Glob pattern '{pattern}' matched no files");
             }
 
             for entry in matches {
                 let path =
-                    entry.with_context(|| format!("Error reading glob match for '{}'", pattern))?;
+                    entry.with_context(|| format!("Error reading glob match for '{pattern}'"))?;
                 if path.is_file() {
                     files.push(path);
                 }
@@ -111,6 +136,7 @@ pub fn expand_input_patterns(patterns: &[String]) -> Result<Vec<PathBuf>> {
 }
 
 /// Check if a file is gzip compressed based on extension
+#[must_use]
 pub fn is_gzipped(path: &Path) -> bool {
     path.extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case("gz"))
@@ -138,22 +164,57 @@ fn is_bgzf(path: &Path) -> Result<bool> {
     Ok(header[12] == b'B' && header[13] == b'C')
 }
 
-/// Read and decompress a gzip file using flate2's MultiGzDecoder
-/// MultiGzDecoder handles concatenated/multi-member gzip files correctly.
-/// Pre-allocates based on compressed size × estimated compression ratio
+/// Read and decompress a gzip file using flate2's `MultiGzDecoder`.
+///
+/// `MultiGzDecoder` handles concatenated/multi-member gzip files correctly.
+/// Pre-allocates based on compressed size x estimated compression ratio
 /// to avoid repeated reallocation during decompression.
-fn read_gzipped_file(path: &Path) -> Result<Vec<u8>> {
+///
+/// When `max_size > 0`, wraps the decoder with `Read::take(max_size + 1)` and
+/// checks the result: if more than `max_size` bytes were read, the file exceeds
+/// the limit. The `+1` trick distinguishes "exactly at limit" (OK) from "exceeds
+/// limit" (reject).
+fn read_gzipped_file(path: &Path, max_size: u64) -> Result<Vec<u8>> {
     let file =
         File::open(path).with_context(|| format!("Failed to open file: {}", path.display()))?;
     let compressed_size = file.metadata().map(|m| m.len()).unwrap_or(0) as usize;
 
-    let mut decoder = MultiGzDecoder::new(file);
-    // Pre-allocate with estimated decompression ratio of ~4x (typical for genomic data).
-    let estimated = compressed_size.saturating_mul(4);
+    let decoder = MultiGzDecoder::new(file);
+    // Adaptive estimation: GenBank metadata compresses differently than raw sequence.
+    // Strip .gz to inspect the inner extension for format-aware ratio selection.
+    let inner_path = path.file_stem().map(std::path::Path::new);
+    let ratio = if inner_path.and_then(|p| p.extension()).is_some_and(|e| {
+        let lower = e.to_ascii_lowercase();
+        matches!(
+            lower.to_str(),
+            Some("gb" | "gbk" | "gbff" | "genbank" | "gbf")
+        )
+    }) {
+        3 // GenBank files: metadata-heavy, lower compression ratio
+    } else {
+        4 // FASTA/other: raw sequence, higher compression ratio
+    };
+    let estimated = compressed_size.saturating_mul(ratio);
     let mut decompressed = Vec::with_capacity(estimated);
-    decoder
-        .read_to_end(&mut decompressed)
-        .with_context(|| format!("Failed to decompress {}", path.display()))?;
+
+    if max_size > 0 {
+        let mut limited = decoder.take(max_size + 1);
+        limited
+            .read_to_end(&mut decompressed)
+            .with_context(|| format!("Failed to decompress {}", path.display()))?;
+        if decompressed.len() as u64 > max_size {
+            return Err(ValidationError::DecompressionLimitExceeded {
+                path: path.to_path_buf(),
+                limit: max_size,
+            }
+            .into());
+        }
+    } else {
+        let mut decoder = decoder;
+        decoder
+            .read_to_end(&mut decompressed)
+            .with_context(|| format!("Failed to decompress {}", path.display()))?;
+    }
 
     Ok(decompressed)
 }
@@ -170,21 +231,29 @@ fn read_plain_file(path: &Path) -> Result<Vec<u8>> {
     Ok(contents)
 }
 
-/// Read all sequences from a single file (FASTA or GenBank)
-pub fn read_sequences_from_file(path: &Path) -> Result<Vec<SequenceRecord>> {
+/// Read all sequences from a single file (FASTA or `GenBank`).
+///
+/// # Errors
+///
+/// Returns an error if the file format is unsupported, the file cannot be
+/// read, or the contents cannot be parsed.
+pub fn read_sequences_from_file(
+    path: &Path,
+    max_decompression_size: u64,
+) -> Result<Vec<SequenceRecord>> {
     let format = detect_format(path)
         .ok_or_else(|| anyhow::anyhow!("Unsupported format: {}", path.display()))?;
 
     // Read file contents (decompress if gzipped)
     let contents = if is_gzipped(path) {
-        read_gzipped_file(path)?
+        read_gzipped_file(path, max_decompression_size)?
     } else {
         read_plain_file(path)?
     };
 
     match format {
         InputFormat::Fasta => parse_fasta(&contents, path),
-        InputFormat::Genbank => parse_genbank(&contents, path),
+        InputFormat::Genbank => Ok(parse_genbank(&contents, path)),
     }
 }
 
@@ -192,8 +261,8 @@ pub fn read_sequences_from_file(path: &Path) -> Result<Vec<SequenceRecord>> {
 // GenBank Parser
 // ============================================================================
 
-/// Parse GenBank records from raw data (uses slice-based fast path)
-fn parse_genbank(data: &[u8], source: &Path) -> Result<Vec<SequenceRecord>> {
+/// Parse `GenBank` records from raw data (uses slice-based fast path)
+fn parse_genbank(data: &[u8], source: &Path) -> Vec<SequenceRecord> {
     use crate::genbank::parse_genbank_slice;
 
     log::trace!("Using slice-based GenBank parser (fast path)");
@@ -216,11 +285,13 @@ fn parse_genbank(data: &[u8], source: &Path) -> Result<Vec<SequenceRecord>> {
             .filter(|s| !s.is_empty())
             .or(rec.accession.as_deref().filter(|s| !s.is_empty()))
             .or(rec.definition.as_deref().filter(|s| !s.is_empty()))
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| {
-                unknown_counter += 1;
-                format!("unknown_{}", unknown_counter)
-            });
+            .map_or_else(
+                || {
+                    unknown_counter += 1;
+                    format!("unknown_{unknown_counter}")
+                },
+                ToString::to_string,
+            );
 
         if rec.is_circular {
             log::info!(
@@ -231,7 +302,7 @@ fn parse_genbank(data: &[u8], source: &Path) -> Result<Vec<SequenceRecord>> {
         }
 
         let mut sequence = rec.seq;
-        sequence.make_ascii_uppercase();
+        ensure_uppercase(&mut sequence);
 
         records.push(SequenceRecord {
             header,
@@ -241,16 +312,27 @@ fn parse_genbank(data: &[u8], source: &Path) -> Result<Vec<SequenceRecord>> {
     }
 
     log::debug!("Read {} sequences from {}", records.len(), source.display());
-    Ok(records)
+    records
 }
 
 // ============================================================================
 // Streaming FASTA Reader (for memory-efficient single-file processing)
 // ============================================================================
 
-/// Create a streaming reader that yields sequences lazily from FASTA or GenBank files.
+/// Create a streaming reader that yields sequences lazily from FASTA or `GenBank` files.
+///
 /// This enables producer-consumer parallelism without loading entire file into memory.
 /// For BGZF-compressed files, uses parallel decompression via gzp.
+///
+/// Decompression limit not applied to streaming reader: `seq_io` processes
+/// one record at a time from the decompression stream, so memory usage is
+/// naturally bounded by a single record's size. The limit exists to prevent
+/// `read_to_end()` (used by `read_gzipped_file`) from loading an entire
+/// decompression bomb into memory, which cannot happen in streaming mode.
+///
+/// # Errors
+///
+/// Returns an error if the file format is unsupported or the file cannot be opened.
 #[cfg(feature = "parser_seqio")]
 pub fn streaming_reader(
     path: &Path,
@@ -330,10 +412,10 @@ impl<R: Read + Send> Iterator for StreamingFastaIter<R> {
             Some(Ok(record)) => {
                 let header = match record.id() {
                     Ok(id) => id.to_string(),
-                    Err(e) => return Some(Err(anyhow::anyhow!("Invalid UTF-8 in header: {}", e))),
+                    Err(e) => return Some(Err(anyhow::anyhow!("Invalid UTF-8 in header: {e}"))),
                 };
                 let mut sequence = record.full_seq().into_owned();
-                sequence.make_ascii_uppercase();
+                ensure_uppercase(&mut sequence);
 
                 Some(Ok(SequenceRecord {
                     header,
@@ -341,7 +423,7 @@ impl<R: Read + Send> Iterator for StreamingFastaIter<R> {
                     source_file: self.source_file.clone(),
                 }))
             }
-            Some(Err(e)) => Some(Err(anyhow::anyhow!("FASTA parse error: {}", e))),
+            Some(Err(e)) => Some(Err(anyhow::anyhow!("FASTA parse error: {e}"))),
             None => None,
         }
     }
@@ -391,21 +473,22 @@ impl<R: Read + Send> Iterator for StreamingGenbankIter<R> {
                         .filter(|s| !s.is_empty())
                         .or(rec.accession.as_deref().filter(|s| !s.is_empty()))
                         .or(rec.definition.as_deref().filter(|s| !s.is_empty()))
-                        .map(|s| s.to_string())
-                        .unwrap_or_else(|| {
-                            self.unknown_counter += 1;
-                            format!("unknown_{}", self.unknown_counter)
-                        });
+                        .map_or_else(
+                            || {
+                                self.unknown_counter += 1;
+                                format!("unknown_{}", self.unknown_counter)
+                            },
+                            ToString::to_string,
+                        );
 
                     if rec.is_circular {
                         log::info!(
-                            "Record '{}' has circular topology; use --circular flag for wrap-around products",
-                            header
+                            "Record '{header}' has circular topology; use --circular flag for wrap-around products"
                         );
                     }
 
                     let mut sequence = rec.seq;
-                    sequence.make_ascii_uppercase();
+                    ensure_uppercase(&mut sequence);
 
                     return Some(Ok(SequenceRecord {
                         header,
@@ -414,7 +497,7 @@ impl<R: Read + Send> Iterator for StreamingGenbankIter<R> {
                     }));
                 }
                 Some(Err(e)) => {
-                    return Some(Err(anyhow::anyhow!("GenBank parse error: {}", e)));
+                    return Some(Err(anyhow::anyhow!("GenBank parse error: {e}")));
                 }
                 None => return None,
             }
@@ -426,17 +509,18 @@ impl<R: Read + Send> Iterator for StreamingGenbankIter<R> {
 #[cfg(feature = "parser_needletail")]
 pub fn streaming_reader(
     path: &Path,
+    max_decompression_size: u64,
 ) -> Result<Box<dyn Iterator<Item = Result<SequenceRecord>> + Send>> {
     let format = detect_format(path)
         .ok_or_else(|| anyhow::anyhow!("Unsupported format: {}", path.display()))?;
     let contents = if is_gzipped(path) {
-        read_gzipped_file(path)?
+        read_gzipped_file(path, max_decompression_size)?
     } else {
         read_plain_file(path)?
     };
     let records = match format {
         InputFormat::Fasta => parse_fasta(&contents, path)?,
-        InputFormat::Genbank => parse_genbank(&contents, path)?,
+        InputFormat::Genbank => parse_genbank(&contents, path),
     };
     Ok(Box::new(records.into_iter().map(Ok)))
 }
@@ -463,7 +547,7 @@ fn parse_fasta(data: &[u8], source: &Path) -> Result<Vec<SequenceRecord>> {
 
         // Use full_seq() which handles multi-line sequences efficiently
         let mut sequence = record.full_seq().into_owned();
-        sequence.make_ascii_uppercase();
+        ensure_uppercase(&mut sequence);
 
         records.push(SequenceRecord {
             header,
@@ -497,13 +581,9 @@ fn parse_fasta(data: &[u8], source: &Path) -> Result<Vec<SequenceRecord>> {
             .with_context(|| "Invalid UTF-8 in FASTA header")?
             .to_string();
 
-        // Get sequence and uppercase
-        let sequence: Vec<u8> = record
-            .seq()
-            .iter()
-            .copied()
-            .map(|b| b.to_ascii_uppercase())
-            .collect();
+        // Get sequence and lazy uppercase (skip if already uppercase)
+        let mut sequence: Vec<u8> = record.seq().to_vec();
+        ensure_uppercase(&mut sequence);
 
         records.push(SequenceRecord {
             header,
@@ -530,6 +610,7 @@ compile_error!(
 );
 
 /// Return the name of the active FASTA parser
+#[must_use]
 pub fn parser_name() -> &'static str {
     #[cfg(feature = "parser_seqio")]
     {
@@ -633,11 +714,11 @@ mod tests {
 
     #[test]
     fn test_nonexistent_file_error() {
-        let result = read_sequences_from_file(Path::new("/nonexistent/path/to/file.fasta"));
+        let result = read_sequences_from_file(Path::new("/nonexistent/path/to/file.fasta"), 0);
         assert!(result.is_err(), "Should error on nonexistent file");
 
         let err = result.unwrap_err();
-        let err_str = format!("{:?}", err);
+        let err_str = format!("{err:?}");
         assert!(
             err_str.contains("Failed to open") || err_str.contains("No such file"),
             "Error should indicate file not found"
@@ -652,19 +733,15 @@ mod tests {
 
         // Behavior depends on parser - some skip invalid, some error
         // At minimum, it should not panic
-        match result {
-            Ok(records) => {
-                // If it succeeds, it should have no valid records
-                // (or parser interprets it differently)
-                assert!(
-                    records.is_empty() || records.iter().all(|r| r.header.is_empty()),
-                    "Invalid FASTA should produce no valid records or error"
-                );
-            }
-            Err(_) => {
-                // Error is also acceptable
-            }
+        if let Ok(records) = result {
+            // If it succeeds, it should have no valid records
+            // (or parser interprets it differently)
+            assert!(
+                records.is_empty() || records.iter().all(|r| r.header.is_empty()),
+                "Invalid FASTA should produce no valid records or error"
+            );
         }
+        // Error is also acceptable
     }
 
     #[test]
@@ -675,12 +752,10 @@ mod tests {
 
         // Parser behavior differs: seq_io returns Ok([]), needletail returns Err
         // Both are acceptable behaviors for an empty file
-        match result {
-            Ok(records) => assert!(records.is_empty(), "Empty file should produce no records"),
-            Err(_) => {
-                // needletail errors on empty files - this is acceptable
-            }
+        if let Ok(records) = result {
+            assert!(records.is_empty(), "Empty file should produce no records");
         }
+        // needletail errors on empty files - this is acceptable
     }
 
     #[test]
@@ -710,7 +785,7 @@ mod tests {
         let result = expand_input_patterns(&[]);
         assert!(result.is_err(), "Should error on no input files");
 
-        let result2 = expand_input_patterns(&["".to_string(), "  ".to_string()]);
+        let result2 = expand_input_patterns(&[String::new(), "  ".to_string()]);
         assert!(result2.is_err(), "Should error on empty patterns");
     }
 
@@ -739,12 +814,11 @@ mod tests {
     #[test]
     fn test_detect_format_fasta_extensions() {
         for ext in &["fasta", "fa", "fna", "ffn", "faa", "frn", "fas"] {
-            let path = PathBuf::from(format!("test.{}", ext));
+            let path = PathBuf::from(format!("test.{ext}"));
             assert_eq!(
                 detect_format(&path),
                 Some(InputFormat::Fasta),
-                "Expected FASTA for .{}",
-                ext
+                "Expected FASTA for .{ext}"
             );
         }
     }
@@ -752,12 +826,11 @@ mod tests {
     #[test]
     fn test_detect_format_genbank_extensions() {
         for ext in &["gb", "gbk", "gbff", "genbank", "gbf"] {
-            let path = PathBuf::from(format!("test.{}", ext));
+            let path = PathBuf::from(format!("test.{ext}"));
             assert_eq!(
                 detect_format(&path),
                 Some(InputFormat::Genbank),
-                "Expected GenBank for .{}",
-                ext
+                "Expected GenBank for .{ext}"
             );
         }
     }
@@ -839,7 +912,7 @@ mod tests {
     // GenBank parsing tests
     // ============================================================================
 
-    /// Minimal valid GenBank record for testing
+    /// Minimal valid `GenBank` record for testing
     fn minimal_genbank(name: &str, seq: &str) -> String {
         format!(
             "LOCUS       {:<16} {} bp    DNA     linear   UNK \nDEFINITION  Test sequence.\nACCESSION   ACC001\nFEATURES             Location/Qualifiers\nORIGIN\n        1 {}\n//\n",
@@ -852,7 +925,7 @@ mod tests {
     #[test]
     fn test_parse_genbank_single_record() {
         let gb = minimal_genbank("TestSeq", "acgtacgt");
-        let records = parse_genbank(gb.as_bytes(), Path::new("test.gb")).unwrap();
+        let records = parse_genbank(gb.as_bytes(), Path::new("test.gb"));
 
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].header, "TestSeq");
@@ -866,7 +939,7 @@ mod tests {
             minimal_genbank("Seq1", "aaaa"),
             minimal_genbank("Seq2", "cccc")
         );
-        let records = parse_genbank(gb.as_bytes(), Path::new("test.gb")).unwrap();
+        let records = parse_genbank(gb.as_bytes(), Path::new("test.gb"));
 
         assert_eq!(records.len(), 2);
         assert_eq!(records[0].header, "Seq1");
@@ -879,7 +952,7 @@ mod tests {
     fn test_parse_genbank_header_fallback_name() {
         // Name is present — use it
         let gb = minimal_genbank("MyLocus", "acgt");
-        let records = parse_genbank(gb.as_bytes(), Path::new("test.gb")).unwrap();
+        let records = parse_genbank(gb.as_bytes(), Path::new("test.gb"));
         assert_eq!(records[0].header, "MyLocus");
     }
 
@@ -887,7 +960,7 @@ mod tests {
     fn test_parse_genbank_header_fallback_unknown() {
         // GenBank with empty name field — should fall back through chain
         let gb = "LOCUS                        4 bp    DNA     linear   UNK \nDEFINITION  .\nACCESSION   \nFEATURES             Location/Qualifiers\nORIGIN\n        1 acgt\n//\n";
-        let records = parse_genbank(gb.as_bytes(), Path::new("test.gb")).unwrap();
+        let records = parse_genbank(gb.as_bytes(), Path::new("test.gb"));
 
         // Should use definition "." or fall back to unknown_1
         assert!(!records[0].header.is_empty());
@@ -897,14 +970,14 @@ mod tests {
     fn test_parse_genbank_empty_sequence_skipped() {
         // Record with no ORIGIN/sequence data
         let gb = "LOCUS       EmptySeq             0 bp    DNA     linear   UNK \nDEFINITION  Empty.\nACCESSION   E001\nFEATURES             Location/Qualifiers\nORIGIN\n//\n";
-        let records = parse_genbank(gb.as_bytes(), Path::new("test.gb")).unwrap();
+        let records = parse_genbank(gb.as_bytes(), Path::new("test.gb"));
         assert_eq!(records.len(), 0, "Empty sequence records should be skipped");
     }
 
     #[test]
     fn test_parse_genbank_uppercase() {
         let gb = minimal_genbank("Lower", "acgtnnnn");
-        let records = parse_genbank(gb.as_bytes(), Path::new("test.gb")).unwrap();
+        let records = parse_genbank(gb.as_bytes(), Path::new("test.gb"));
         assert_eq!(records[0].sequence, b"ACGTNNNN");
     }
 
@@ -918,7 +991,7 @@ mod tests {
         temp.write_all(gb.as_bytes()).unwrap();
         temp.flush().unwrap();
 
-        let records = read_sequences_from_file(temp.path()).unwrap();
+        let records = read_sequences_from_file(temp.path(), 0).unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].header, "FileTest");
         assert_eq!(records[0].sequence, b"ACGTACGT");
@@ -938,7 +1011,13 @@ mod tests {
         temp.write_all(gb.as_bytes()).unwrap();
         temp.flush().unwrap();
 
+        #[cfg(feature = "parser_seqio")]
         let records: Vec<_> = streaming_reader(temp.path())
+            .unwrap()
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
+        #[cfg(feature = "parser_needletail")]
+        let records: Vec<_> = streaming_reader(temp.path(), u64::MAX)
             .unwrap()
             .collect::<Result<Vec<_>>>()
             .unwrap();

@@ -1,6 +1,6 @@
 [package]
 name = "amplirust"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "In-silico PCR primer matching and product extraction tool"
 license = "MIT"
@@ -11,7 +11,7 @@ parser_seqio = ["seq_io"]
 parser_needletail = ["needletail"]
 
 [dependencies]
-sassy = "0.1"                 # Approximate string matching with IUPAC
+sassy = "0.2"                 # Approximate string matching with IUPAC
 flate2 = "1.0"                # Gzip decompression (handles multi-member archives)
 gzp = { version = "2.0", default-features = false, features = ["deflate_default"] }  # Multi-threaded gzip compression/decompression
 clap = { version = "4", features = ["derive"] }
@@ -33,6 +33,37 @@ needletail = { version = "0.6", optional = true }
 
 [dev-dependencies]
 tempfile = "3.15"
+proptest = "1.10"
+insta = "1.46"
+criterion = "0.8"
+rand = "0.10"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+
+# Domain-appropriate allows for bioinformatics CLI tool
+similar_names          = "allow"  # fwd/rev, seq/ref are meaningful distinct names
+cast_precision_loss    = "allow"  # usize->f64 for progress bars and statistics
+too_many_lines         = "allow"  # Complex PCR matching/extraction pipelines
+struct_excessive_bools = "allow"  # Match configuration structs
+cast_sign_loss         = "allow"  # Controlled integer conversions in sequence handling
+cast_possible_truncation = "allow"  # u64->usize on known 64-bit platforms
+
+[[bench]]
+name = "matching"
+harness = false
+
+[[bench]]
+name = "parsing"
+harness = false
+
+[[bench]]
+name = "pipeline"
+harness = false
+
+[[bench]]
+name = "circular"
+harness = false
 
 [profile.release]
 lto = true
