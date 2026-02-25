@@ -9,7 +9,6 @@ git-fetch-with-cli = true
 ignore = [
     "RUSTSEC-2025-0119", # number_prefix unmaintained (transitive via indicatif), no fix available
     "RUSTSEC-2024-0388", # derivative unmaintained (transitive via sassy), no fix available
-    "RUSTSEC-2024-0388", # derivative unmaintained (transitive via sassy), no fix available
 ]
 
 [licenses]
