@@ -16,7 +16,9 @@ use crate::output::{
     FastaWriter, RunSummary, TsvWriter, validate_output_writable, write_fasta_record,
 };
 use crate::pcr::{PcrConfig, canonical_sequence, find_pcr_products, find_pool_products};
-use crate::primer::{parse_pool_primers, parse_primers, warn_pool_primer_length, warn_primer_length};
+use crate::primer::{
+    parse_pool_primers, parse_primers, warn_pool_primer_length, warn_primer_length,
+};
 
 /// Minimum streaming buffer size (sequences in flight).
 const MIN_BUFFER_SIZE: usize = 32;
@@ -107,8 +109,7 @@ pub fn run(args: &Args) -> Result<()> {
     let pool_self_match = args.pool_self_match;
 
     let pool_primers: Option<Arc<Vec<crate::primer::Primer>>> = if pool_mode {
-        let primers =
-            parse_pool_primers(&args.primers).context("Failed to parse pool primers")?;
+        let primers = parse_pool_primers(&args.primers).context("Failed to parse pool primers")?;
         log::info!("Loaded {} pool primer(s)", primers.len());
         for primer in &primers {
             log::debug!(
@@ -479,11 +480,7 @@ pub fn run(args: &Args) -> Result<()> {
                         ));
                     } else if let Some(ref pairs) = pair_primers {
                         for primer in pairs.iter() {
-                            products.extend(find_pcr_products(
-                                record,
-                                primer,
-                                pcr_config.as_ref(),
-                            ));
+                            products.extend(find_pcr_products(record, primer, pcr_config.as_ref()));
                         }
                     }
                 }
